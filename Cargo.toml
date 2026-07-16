@@ -1,0 +1,39 @@
+[package]
+name = "auxin-ng"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "Scriptable, protocol-transparent Signal CLI built on presage"
+
+[dependencies]
+presage = { git = "https://github.com/whisperfish/presage", rev = "63482efd0cbdc0780baf0650517c7d55f1cac05d" }
+presage-store-sqlite = { git = "https://github.com/whisperfish/presage", rev = "63482efd0cbdc0780baf0650517c7d55f1cac05d" }
+
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "io-std", "io-util", "fs"] }
+futures = "0.3"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+prost = "0.14"
+prost-reflect = { version = "0.16", features = ["serde"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+base64 = "0.22"
+hex = "0.4"
+mime_guess = "2"
+qr2term = "0.3"
+url = "2"
+directories = "6"
+chrono = "0.4"
+uuid = "1"
+
+[build-dependencies]
+protox = "0.9"
+prost = "0.14"
+
+# presage's workspace applies these patches; they don't propagate to consumers,
+# so every downstream workspace has to repeat them (see presage README).
+[patch.crates-io]
+curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag = "signal-curve25519-4.1.3" }
+libsqlite3-sys = { version = "0.36.0", git = "https://github.com/whisperfish/rusqlite", rev = "2a42b3354c9194700d08aa070f70a131a470e7dc" }
