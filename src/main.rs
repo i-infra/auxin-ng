@@ -22,7 +22,6 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use url::Url;
 
 use crate::app::Recipient;
-use crate::emit::Event;
 
 #[derive(Parser)]
 #[clap(name = "auxin-ng", version, about = "Scriptable, protocol-transparent Signal CLI")]

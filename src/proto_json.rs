@@ -47,7 +47,8 @@ pub fn proto_bytes_to_json(type_name: &str, bytes: &[u8]) -> Result<Value> {
 
 /// Parse canonical proto-JSON into encoded protobuf bytes.
 pub fn json_to_proto_bytes(type_name: &str, json: &Value) -> Result<Vec<u8>> {
-    let mut deserializer = serde_json::Deserializer::from_str(&json.to_string());
+    let raw = json.to_string();
+    let mut deserializer = serde_json::Deserializer::from_str(&raw);
     let message = DynamicMessage::deserialize(descriptor(type_name)?, &mut deserializer)
         .with_context(|| format!("parsing JSON as {type_name}"))?;
     deserializer.end()?;
@@ -132,4 +133,57 @@ pub fn json_to_body(type_name: &str, json: &Value) -> Result<ContentBody> {
         other => bail!("cannot send content of type {other}"),
     };
     Ok(body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn data_message_roundtrips_through_json() {
+        let input = json!({
+            "body": "hello world",
+            "timestamp": "1752650000000",
+            "expireTimer": 3600,
+        });
+        let body = json_to_body("DataMessage", &input).unwrap();
+        let ContentBody::DataMessage(ref m) = body else {
+            panic!("expected DataMessage");
+        };
+        assert_eq!(m.body.as_deref(), Some("hello world"));
+        assert_eq!(m.timestamp, Some(1752650000000));
+        assert_eq!(m.expire_timer, Some(3600));
+
+        let (tag, output) = body_to_json(&body).unwrap();
+        assert_eq!(tag, "dataMessage");
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn every_content_body_type_is_in_the_descriptor_pool() {
+        for name in [
+            "signalservice.NullMessage",
+            "signalservice.DataMessage",
+            "signalservice.SyncMessage",
+            "signalservice.CallMessage",
+            "signalservice.ReceiptMessage",
+            "signalservice.TypingMessage",
+            "signalservice.DecryptionErrorMessage",
+            "signalservice.StoryMessage",
+            "signalservice.PniSignatureMessage",
+            "signalservice.EditMessage",
+        ] {
+            assert!(
+                pool().get_message_by_name(name).is_some(),
+                "{name} missing from descriptor pool"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_fields() {
+        let input = json!({"body": "hi", "notAField": true});
+        assert!(json_to_body("DataMessage", &input).is_err());
+    }
 }

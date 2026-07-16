@@ -14,7 +14,7 @@ use presage::libsignal_service::zkgroup::GroupMasterKeyBytes;
 use presage::model::identity::OnNewIdentity;
 use presage::model::messages::Received;
 use presage::proto::{AttachmentPointer, DataMessage, GroupContextV2};
-use presage::store::Store;
+use presage::store::ContentsStore;
 use presage::{manager::Registered, Manager};
 use presage_store_sqlite::SqliteStore;
 use serde_json::Value;
