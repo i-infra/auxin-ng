@@ -28,8 +28,12 @@ use crate::app::Recipient;
 #[clap(name = "auxin-ng", version, about = "Scriptable, protocol-transparent Signal CLI")]
 struct Args {
     /// Path to the sqlite state database.
-    #[clap(long, global = true)]
+    #[clap(long, global = true, conflicts_with = "account")]
     db_path: Option<PathBuf>,
+
+    /// Named account: shorthand for --db-path <data-dir>/accounts/<name>.db3.
+    #[clap(long, short = 'a', global = true)]
+    account: Option<String>,
 
     /// Passphrase to encrypt the local state database.
     #[clap(long, short = 'p', global = true)]
@@ -114,6 +118,9 @@ enum Command {
         #[clap(long)]
         auto_accept: bool,
     },
+    /// List local account databases (default + named) with their
+    /// identities, read from local state only.
+    ListAccounts,
     /// Dump a protobuf message type's field tree as JSON (all types when
     /// omitted). No account or network needed.
     Schema {
@@ -147,8 +154,16 @@ async fn main() -> Result<()> {
         print_json(&value);
         return Ok(());
     }
+    if matches!(args.command, Command::ListAccounts) {
+        print_json(&app::list_accounts().await);
+        return Ok(());
+    }
 
-    let db_path = args.db_path.clone().unwrap_or_else(app::default_db_path);
+    let db_path = match (&args.db_path, &args.account) {
+        (Some(path), _) => path.clone(),
+        (None, Some(account)) => app::account_db_path(account)?,
+        (None, None) => app::default_db_path(),
+    };
     let store = app::open_store(&db_path, args.passphrase.as_deref()).await?;
 
     let local = tokio::task::LocalSet::new();
@@ -275,7 +290,9 @@ async fn run(command: Command, store: presage_store_sqlite::SqliteStore) -> Resu
             let manager = Manager::load_registered(store).await?;
             rpc::run(manager, attachments_dir, auto_accept).await?;
         }
-        Command::Schema { .. } => unreachable!("handled before store setup"),
+        Command::Schema { .. } | Command::ListAccounts => {
+            unreachable!("handled before store setup")
+        }
         Command::ListContacts => {
             let manager = Manager::load_registered(store).await?;
             print_json(&app::list_contacts(&manager).await?);

@@ -54,6 +54,23 @@ State lives in a sqlite database (`--db-path`, optionally encrypted with
 `--passphrase`), compatible with nothing else on purpose — presage owns the
 schema.
 
+## Multiple accounts
+
+One database is one account (that's presage's model), so multiple accounts
+are just multiple databases. `--account <name>` / `-a <name>` is shorthand
+for `--db-path <data-dir>/accounts/<name>.db3`:
+
+```sh
+auxin-ng -a personal link-device --device-name auxin-personal
+auxin-ng -a botfarm  link-device --device-name auxin-bot
+auxin-ng -a botfarm  receive | jq -c .
+auxin-ng list-accounts   # inventory: identities read from local state only
+```
+
+Running one process per account concurrently is fine — stores are fully
+independent. `list-accounts` reports encrypted databases as unreadable
+(pass the right `--passphrase` and the account itself still works).
+
 ## JSONL event shapes
 
 ```json

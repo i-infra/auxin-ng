@@ -24,11 +24,97 @@ use crate::proto_json;
 
 pub type App = Manager<SqliteStore, Registered>;
 
-pub fn default_db_path() -> PathBuf {
+fn data_dir() -> PathBuf {
     directories::ProjectDirs::from("io", "auxin", "auxin-ng")
         .expect("home directory exists")
         .data_dir()
-        .join("auxin.db3")
+        .to_path_buf()
+}
+
+pub fn default_db_path() -> PathBuf {
+    data_dir().join("auxin.db3")
+}
+
+pub fn accounts_dir() -> PathBuf {
+    data_dir().join("accounts")
+}
+
+/// Database path for a named account (`--account`), kept under
+/// `<data-dir>/accounts/<name>.db3`.
+pub fn account_db_path(name: &str) -> Result<PathBuf> {
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        || name.starts_with('.')
+    {
+        bail!("account names may only contain [A-Za-z0-9._-] and must not start with a dot");
+    }
+    Ok(accounts_dir().join(format!("{name}.db3")))
+}
+
+/// Inventory of local account databases: the default db plus everything
+/// under the accounts directory. Reads registration data only — no network.
+pub async fn list_accounts() -> Value {
+    let mut candidates: Vec<(String, PathBuf)> = Vec::new();
+    let default = default_db_path();
+    if default.exists() {
+        candidates.push(("default".into(), default));
+    }
+    if let Ok(entries) = std::fs::read_dir(accounts_dir()) {
+        let mut named: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "db3"))
+            .collect();
+        named.sort();
+        for path in named {
+            let name = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+            candidates.push((name, path));
+        }
+    }
+
+    let mut accounts = Vec::new();
+    for (name, path) in candidates {
+        let mut entry = serde_json::json!({
+            "account": name,
+            "path": path.display().to_string(),
+        });
+        match describe_account(&path).await {
+            Ok(details) => {
+                entry["status"] = "registered".into();
+                for (k, v) in details {
+                    entry[k] = v;
+                }
+            }
+            Err(status) => entry["status"] = status.into(),
+        }
+        accounts.push(entry);
+    }
+    Value::Array(accounts)
+}
+
+async fn describe_account(path: &Path) -> Result<Vec<(&'static str, Value)>, String> {
+    use presage::store::StateStore;
+    let store = open_store(path, None)
+        .await
+        .map_err(|_| "unreadable (encrypted or corrupt)".to_string())?;
+    let data = match store.load_registration_data().await {
+        Ok(Some(data)) => data,
+        Ok(None) => return Err("unregistered".to_string()),
+        Err(_) => return Err("unreadable (encrypted or corrupt)".to_string()),
+    };
+    Ok(vec![
+        ("aci", data.service_ids.aci.to_string().into()),
+        ("pni", data.service_ids.pni.to_string().into()),
+        ("phoneNumber", data.phone_number.to_string().into()),
+        ("deviceName", data.device_name().map(str::to_string).into()),
+        (
+            "deviceId",
+            data.device_id.map(|id| Value::from(id)).unwrap_or(Value::Null),
+        ),
+        ("servers", format!("{:?}", data.signal_servers).into()),
+    ])
 }
 
 pub async fn open_store(db_path: &Path, passphrase: Option<&str>) -> Result<SqliteStore> {
