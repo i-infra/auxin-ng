@@ -93,6 +93,13 @@ Canonical proto-JSON conventions to remember: 64-bit ints are JSON strings
 (`"timestamp":"178..."`), `bytes` fields are base64, enums are their name
 strings (`"action":"STARTED"`).
 
+To discover what's sendable without reading the .proto files, `auxin-ng
+schema` lists every message type in the embedded descriptors, and
+`auxin-ng schema DataMessage` (unqualified names ok) dumps that type's
+field tree — JSON field names, numbers, cardinality, enum values, nested
+messages expanded inline (`"$recursive": true` marks cycles). Works
+offline, no account needed.
+
 ## Provenance
 
 - presage / presage-store-sqlite are git-pinned; `Cargo.lock` is committed

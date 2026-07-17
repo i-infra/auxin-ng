@@ -8,6 +8,7 @@ mod app;
 mod emit;
 mod proto_json;
 mod rpc;
+mod schema;
 
 use std::path::PathBuf;
 
@@ -113,6 +114,12 @@ enum Command {
         #[clap(long)]
         auto_accept: bool,
     },
+    /// Dump a protobuf message type's field tree as JSON (all types when
+    /// omitted). No account or network needed.
+    Schema {
+        /// Type name, qualified or not: DataMessage, signalservice.Envelope, …
+        type_name: Option<String>,
+    },
     /// List known contacts as JSON.
     ListContacts,
     /// List known groups as JSON.
@@ -130,6 +137,17 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+
+    // Pure descriptor introspection; no store or network involved.
+    if let Command::Schema { type_name } = &args.command {
+        let value = match type_name {
+            Some(name) => schema::describe(name)?,
+            None => schema::list_types(),
+        };
+        print_json(&value);
+        return Ok(());
+    }
+
     let db_path = args.db_path.clone().unwrap_or_else(app::default_db_path);
     let store = app::open_store(&db_path, args.passphrase.as_deref()).await?;
 
@@ -257,6 +275,7 @@ async fn run(command: Command, store: presage_store_sqlite::SqliteStore) -> Resu
             let manager = Manager::load_registered(store).await?;
             rpc::run(manager, attachments_dir, auto_accept).await?;
         }
+        Command::Schema { .. } => unreachable!("handled before store setup"),
         Command::ListContacts => {
             let manager = Manager::load_registered(store).await?;
             print_json(&app::list_contacts(&manager).await?);
