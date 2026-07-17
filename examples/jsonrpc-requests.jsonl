@@ -1,0 +1,20 @@
+{"jsonrpc":"2.0","id":1,"method":"version"}
+{"jsonrpc":"2.0","id":2,"method":"whoami"}
+{"jsonrpc":"2.0","id":3,"method":"listContacts"}
+{"jsonrpc":"2.0","id":4,"method":"listGroups"}
+{"jsonrpc":"2.0","id":10,"method":"send","params":{"recipient":"00000000-0000-4000-8000-000000000000","message":"plain text hello"}}
+{"jsonrpc":"2.0","id":11,"method":"send","params":{"recipient":"00000000-0000-4000-8000-000000000000","message":"with attachments","attachments":["/tmp/cat.jpg","/tmp/notes.pdf"]}}
+{"jsonrpc":"2.0","id":12,"method":"send","params":{"group":"<64-hex-group-master-key>","message":"hello group"}}
+{"jsonrpc":"2.0","id":20,"method":"send","params":{"recipient":"00000000-0000-4000-8000-000000000000","content":{"body":"raw DataMessage with a link preview","preview":[{"url":"https://example.com","title":"Example"}]}}}
+{"jsonrpc":"2.0","id":21,"method":"send","params":{"recipient":"00000000-0000-4000-8000-000000000000","content":{"reaction":{"emoji":"🔥","targetAuthorAci":"00000000-0000-4000-8000-000000000000","targetSentTimestamp":"1784318141915"}}}}
+{"jsonrpc":"2.0","id":22,"method":"send","params":{"recipient":"00000000-0000-4000-8000-000000000000","content":{"body":"replying to you","quote":{"id":"1784318141915","authorAci":"00000000-0000-4000-8000-000000000000","text":"mic check!"}}}}
+{"jsonrpc":"2.0","id":23,"method":"send","params":{"recipient":"00000000-0000-4000-8000-000000000000","contentType":"TypingMessage","content":{"timestamp":"1784318141915","action":"STARTED"}}}
+{"jsonrpc":"2.0","id":24,"method":"send","params":{"recipient":"00000000-0000-4000-8000-000000000000","contentType":"TypingMessage","content":{"timestamp":"1784318141915","action":"STOPPED"}}}
+{"jsonrpc":"2.0","id":25,"method":"send","params":{"recipient":"00000000-0000-4000-8000-000000000000","contentType":"ReceiptMessage","content":{"type":"READ","timestamp":["1784318141915"]}}}
+{"jsonrpc":"2.0","id":26,"method":"send","params":{"recipient":"00000000-0000-4000-8000-000000000000","contentType":"ReceiptMessage","content":{"type":"DELIVERY","timestamp":["1784318141915","1784318141932"]}}}
+{"jsonrpc":"2.0","id":27,"method":"send","params":{"recipient":"00000000-0000-4000-8000-000000000000","contentType":"EditMessage","content":{"targetSentTimestamp":"1784318141915","dataMessage":{"body":"edited text"}}}}
+{"jsonrpc":"2.0","id":28,"method":"send","params":{"recipient":"00000000-0000-4000-8000-000000000000","content":{"flags":2,"expireTimer":86400,"expireTimerVersion":3}}}
+{"jsonrpc":"2.0","id":29,"method":"send","params":{"recipient":"00000000-0000-4000-8000-000000000000","content":{"flags":4,"profileKey":"QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQT4="}}}
+{"jsonrpc":"2.0","id":30,"method":"send","params":{"recipient":"00000000-0000-4000-8000-000000000000","content":{"body":"end session","flags":1}}}
+{"jsonrpc":"2.0","id":31,"method":"send","params":{"recipient":"00000000-0000-4000-8000-000000000000","content":{"sticker":{"packId":"AAAAAAAAAAAAAAAAAAAAAA==","packKey":"QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQT4=","stickerId":0}}}}
+{"jsonrpc":"2.0","id":32,"method":"send","params":{"recipient":"PNI:00000000-0000-4000-8000-000000000000","message":"to a PNI service id"}}

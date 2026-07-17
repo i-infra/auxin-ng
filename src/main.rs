@@ -97,6 +97,10 @@ enum Command {
         /// Directory to download attachments into (downloads off when unset).
         #[clap(long)]
         attachments_dir: Option<PathBuf>,
+        /// Greet first contact from new senders with a delivery receipt and
+        /// our profile key, so both sides see profile details.
+        #[clap(long)]
+        auto_accept: bool,
     },
     /// JSON-RPC 2.0 daemon on stdin/stdout, streaming incoming messages
     /// as notifications.
@@ -104,6 +108,10 @@ enum Command {
         /// Directory to download attachments into (downloads off when unset).
         #[clap(long)]
         attachments_dir: Option<PathBuf>,
+        /// Greet first contact from new senders with a delivery receipt and
+        /// our profile key, so both sides see profile details.
+        #[clap(long)]
+        auto_accept: bool,
     },
     /// List known contacts as JSON.
     ListContacts,
@@ -228,6 +236,7 @@ async fn run(command: Command, store: presage_store_sqlite::SqliteStore) -> Resu
         Command::Receive {
             stop_after_empty_queue,
             attachments_dir,
+            auto_accept,
         } => {
             let mut manager = Manager::load_registered(store).await?;
             app::receive(
@@ -235,14 +244,18 @@ async fn run(command: Command, store: presage_store_sqlite::SqliteStore) -> Resu
                 app::ReceiveOptions {
                     stop_after_empty_queue,
                     attachments_dir,
+                    auto_accept,
                 },
                 |event| event.emit(),
             )
             .await?;
         }
-        Command::Jsonrpc { attachments_dir } => {
+        Command::Jsonrpc {
+            attachments_dir,
+            auto_accept,
+        } => {
             let manager = Manager::load_registered(store).await?;
-            rpc::run(manager, attachments_dir).await?;
+            rpc::run(manager, attachments_dir, auto_accept).await?;
         }
         Command::ListContacts => {
             let manager = Manager::load_registered(store).await?;

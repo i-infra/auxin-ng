@@ -182,6 +182,30 @@ mod tests {
     }
 
     #[test]
+    fn example_jsonrpc_blobs_are_valid_proto_json() {
+        let examples = include_str!("../examples/jsonrpc-requests.jsonl");
+        let mut checked = 0;
+        for (i, line) in examples.lines().enumerate() {
+            let request: serde_json::Value =
+                serde_json::from_str(line).unwrap_or_else(|e| panic!("line {}: {e}", i + 1));
+            let Some(params) = request.get("params") else {
+                continue;
+            };
+            let Some(content) = params.get("content") else {
+                continue;
+            };
+            let content_type = params
+                .get("contentType")
+                .and_then(|v| v.as_str())
+                .unwrap_or("DataMessage");
+            json_to_body(content_type, content)
+                .unwrap_or_else(|e| panic!("line {}: {e:#}", i + 1));
+            checked += 1;
+        }
+        assert!(checked >= 10, "expected to validate at least 10 examples");
+    }
+
+    #[test]
     fn rejects_unknown_fields() {
         let input = json!({"body": "hi", "notAField": true});
         assert!(json_to_body("DataMessage", &input).is_err());

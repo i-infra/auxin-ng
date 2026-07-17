@@ -42,7 +42,7 @@ impl From<&Content> for JsonEnvelope {
 /// A single JSONL event. `content` is the canonical proto-JSON of the
 /// message body; `content_type` names its protobuf type in camelCase.
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase", tag = "type")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "type")]
 pub enum Event {
     #[serde(rename = "message")]
     Message {
@@ -66,6 +66,12 @@ pub enum Event {
     },
     #[serde(rename = "error")]
     Error { message: String },
+    /// The server dropped the websocket; a new connection is being made.
+    #[serde(rename = "reconnecting")]
+    Reconnecting { attempt: u32, delay_ms: u64 },
+    /// Auto-accept greeted a new sender (delivery receipt + profile key).
+    #[serde(rename = "accepted")]
+    Accepted { sender: String },
 }
 
 impl Event {

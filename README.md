@@ -62,7 +62,21 @@ schema.
 {"type":"contactsSynced"}
 {"type":"attachmentDownloaded","sender":"...","timestamp":1752650000000,"path":"...","contentType":"image/jpeg","fileName":"cat.jpg"}
 {"type":"error","message":"..."}
+{"type":"reconnecting","attempt":1,"delayMs":1000}
 ```
+
+The Signal server drops idle websockets; presage's stream ends when that
+happens, so auxin-ng reconnects automatically with capped exponential
+backoff, emitting a `reconnecting` event each time.
+
+## Auto-accept
+
+`receive --auto-accept` / `jsonrpc --auto-accept` greet the first direct
+data message from each new sender with a delivery receipt and a
+`PROFILE_KEY_UPDATE` data message sharing our profile key — the wire-level
+equivalent of accepting a message request, so both sides can decrypt each
+other's profile details. Each greeting emits an
+`{"type":"accepted","sender":"<uuid>"}` event.
 
 ## JSON-RPC methods
 
@@ -70,6 +84,14 @@ schema.
 `contentType`], `attachments`), `whoami`, `listContacts`, `listGroups`,
 `version`. Incoming events arrive as notifications whose `method` is the
 event type and whose `params` is the JSONL event object.
+
+[`examples/jsonrpc-requests.jsonl`](examples/jsonrpc-requests.jsonl) has a
+ready-to-adapt request per message type — plain text, attachments, group
+sends, reactions, quotes, typing indicators, read/delivery receipts, edits,
+expire-timer updates, profile-key shares, stickers, and PNI addressing.
+Canonical proto-JSON conventions to remember: 64-bit ints are JSON strings
+(`"timestamp":"178..."`), `bytes` fields are base64, enums are their name
+strings (`"action":"STARTED"`).
 
 ## Provenance
 

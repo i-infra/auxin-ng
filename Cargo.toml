@@ -9,7 +9,7 @@ description = "Scriptable, protocol-transparent Signal CLI built on presage"
 presage = { git = "https://github.com/whisperfish/presage", rev = "63482efd0cbdc0780baf0650517c7d55f1cac05d" }
 presage-store-sqlite = { git = "https://github.com/whisperfish/presage", rev = "63482efd0cbdc0780baf0650517c7d55f1cac05d" }
 
-tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "io-std", "io-util", "fs"] }
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "io-std", "io-util", "fs", "time"] }
 futures = "0.3"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

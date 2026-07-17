@@ -186,9 +186,17 @@ pub struct ReceiveOptions {
     /// Download attachments into this directory, emitting an
     /// `attachmentDownloaded` event per file. `None` disables downloads.
     pub attachments_dir: Option<PathBuf>,
+    /// On the first data message from each sender, send a delivery receipt
+    /// and share our profile key, so new conversations get our profile
+    /// details without a manual accept.
+    pub auto_accept: bool,
 }
 
 /// Stream incoming messages, invoking `on_event` for each JSONL event.
+///
+/// Presage's message stream terminates when the websocket dies (failed
+/// keepalives, server-side idle drop) and never reconnects on its own, so
+/// this reconnects with capped exponential backoff until told to stop.
 pub async fn receive(
     manager: &mut App,
     options: ReceiveOptions,
@@ -197,30 +205,127 @@ pub async fn receive(
     if let Some(dir) = &options.attachments_dir {
         std::fs::create_dir_all(dir)?;
     }
-    let messages = manager
-        .receive_messages()
-        .await
-        .context("failed to initialize message stream")?;
-    pin_mut!(messages);
 
-    while let Some(received) = messages.next().await {
-        match received {
-            Received::QueueEmpty => {
-                on_event(Event::QueueEmpty);
-                if options.stop_after_empty_queue {
-                    break;
-                }
+    let mut accepted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut sender_manager = manager.clone();
+    let own_aci = manager.registration_data().service_ids.aci.to_string();
+
+    let mut attempt: u32 = 0;
+    loop {
+        let messages = match manager.receive_messages().await {
+            Ok(messages) => messages,
+            // The very first connection failing is a config/credential
+            // problem worth dying loudly over; later failures get retried.
+            Err(error) if attempt == 0 => {
+                return Err(error).context("failed to initialize message stream")
             }
-            Received::Contacts => on_event(Event::ContactsSynced),
-            Received::Content(content) => {
-                on_event(Event::message(&content));
-                if let Some(dir) = &options.attachments_dir {
-                    download_attachments(manager, dir, &content, &mut on_event).await;
+            Err(error) => {
+                on_event(Event::Error {
+                    message: format!("failed to reconnect message stream: {error:#}"),
+                });
+                attempt = backoff(attempt, &mut on_event).await;
+                continue;
+            }
+        };
+        pin_mut!(messages);
+
+        while let Some(received) = messages.next().await {
+            attempt = 0;
+            match received {
+                Received::QueueEmpty => {
+                    on_event(Event::QueueEmpty);
+                    if options.stop_after_empty_queue {
+                        return Ok(());
+                    }
+                }
+                Received::Contacts => on_event(Event::ContactsSynced),
+                Received::Content(content) => {
+                    on_event(Event::message(&content));
+                    if options.auto_accept {
+                        auto_accept(
+                            &mut sender_manager,
+                            &own_aci,
+                            &mut accepted,
+                            &content,
+                            &mut on_event,
+                        )
+                        .await;
+                    }
+                    if let Some(dir) = &options.attachments_dir {
+                        download_attachments(manager, dir, &content, &mut on_event).await;
+                    }
                 }
             }
         }
+
+        // Stream ended: the websocket is gone. Reconnect.
+        attempt = backoff(attempt, &mut on_event).await;
     }
-    Ok(())
+}
+
+async fn backoff(attempt: u32, on_event: &mut impl FnMut(Event)) -> u32 {
+    let delay_ms = 1000u64.saturating_mul(1 << attempt.min(6)); // 1s .. 64s
+    on_event(Event::Reconnecting {
+        attempt: attempt + 1,
+        delay_ms,
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+    attempt + 1
+}
+
+/// "Accept" a first contact from a new sender: acknowledge with a delivery
+/// receipt and share our profile key (a `PROFILE_KEY_UPDATE` data message),
+/// which is what lets the peer decrypt our profile name/details.
+async fn auto_accept(
+    manager: &mut App,
+    own_aci: &str,
+    accepted: &mut std::collections::HashSet<String>,
+    content: &Content,
+    on_event: &mut impl FnMut(Event),
+) {
+    // Only direct data messages from someone else start a conversation.
+    let ContentBody::DataMessage(data_message) = &content.body else {
+        return;
+    };
+    if data_message.group_v2.is_some() {
+        return;
+    }
+    let sender = content.metadata.sender.service_id_string();
+    if sender == own_aci || accepted.contains(&sender) {
+        return;
+    }
+    accepted.insert(sender.clone());
+
+    let service_id = content.metadata.sender;
+    let message_timestamp = content.metadata.timestamp.timestamp_millis() as u64;
+
+    let receipt = ContentBody::ReceiptMessage(presage::proto::ReceiptMessage {
+        r#type: Some(presage::proto::receipt_message::Type::Delivery as i32),
+        timestamp: vec![message_timestamp],
+    });
+    let profile_share = ContentBody::DataMessage(DataMessage {
+        profile_key: Some(
+            manager
+                .registration_data()
+                .profile_key()
+                .get_bytes()
+                .to_vec(),
+        ),
+        flags: Some(presage::proto::data_message::Flags::ProfileKeyUpdate as u32),
+        timestamp: Some(now_millis()),
+        ..Default::default()
+    });
+
+    for body in [receipt, profile_share] {
+        let timestamp = now_millis();
+        if let Err(error) = manager.send_message(service_id, body, timestamp).await {
+            on_event(Event::Error {
+                message: format!("auto-accept send to {sender} failed: {error:#}"),
+            });
+            return;
+        }
+    }
+    on_event(Event::Accepted { sender });
 }
 
 async fn download_attachments(

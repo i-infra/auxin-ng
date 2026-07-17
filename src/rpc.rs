@@ -84,7 +84,11 @@ async fn handle_send(manager: &mut App, params: Value) -> Result<Value> {
     app::send(manager, recipient, body).await
 }
 
-pub async fn run(manager: App, attachments_dir: Option<PathBuf>) -> Result<()> {
+pub async fn run(
+    manager: App,
+    attachments_dir: Option<PathBuf>,
+    auto_accept: bool,
+) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
 
     // Single writer task keeps responses and notifications line-atomic.
@@ -103,6 +107,7 @@ pub async fn run(manager: App, attachments_dir: Option<PathBuf>) -> Result<()> {
             ReceiveOptions {
                 stop_after_empty_queue: false,
                 attachments_dir,
+                auto_accept,
             },
             |event| {
                 let value = event.to_value();
