@@ -163,8 +163,11 @@ Upstream in presage / libsignal-service-rs:
    `listContacts` emits `profile.mobileCoinAddress` as base64 of the raw
    verified MobileCoin public address, like signal-cli. Live-verified
    2026-07-18 (set → read-back-verified → clear).
-10. **Username set + usernameLink** — no reserve/confirm/link endpoints in
-    libsignal-service-rs (only `lookup_username`). Still open.
+10. **Username set + usernameLink** — still open, but researched and
+    smaller than assumed: the `usernames` crate (already a dependency)
+    has all the crypto, and lookup + link endpoints already exist in
+    libsignal-service-rs; only reserve/confirm/delete wrappers and
+    orchestration are missing. Plan: [username-support.md](username-support.md).
 
 Not needed by forest, known absent (unchanged from before): group management,
 profile/contact/device/identity management commands, polls, sendReceipt
