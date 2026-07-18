@@ -32,6 +32,15 @@ uuid = "1"
 protox = "0.9"
 prost = "0.14"
 
+# Local patched checkouts (pinned revs + our profile avatar / payment
+# address work, pending upstreaming). See docs/signal-cli-compat.md gaps.
+[patch."https://github.com/whisperfish/presage"]
+presage = { path = "../presage/presage" }
+presage-store-sqlite = { path = "../presage/presage-store-sqlite" }
+
+[patch."https://github.com/whisperfish/libsignal-service-rs"]
+libsignal-service = { path = "../libsignal-service-rs" }
+
 # presage's workspace applies these patches; they don't propagate to consumers,
 # so every downstream workspace has to repeat them (see presage README).
 [patch.crates-io]

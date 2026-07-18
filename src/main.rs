@@ -5,6 +5,7 @@
 //! JSON-RPC 2.0 daemon mode — on top of a maintained Signal stack.
 
 mod app;
+mod compat;
 mod emit;
 mod proto_json;
 mod rpc;
@@ -34,6 +35,25 @@ struct Args {
     /// Named account: shorthand for --db-path <data-dir>/accounts/<name>.db3.
     #[clap(long, short = 'a', global = true)]
     account: Option<String>,
+
+    /// signal-cli compatibility: speak signal-cli's JSON-RPC dialect
+    /// (`receive` envelope notifications, signal-cli method params).
+    #[clap(long, global = true)]
+    signal_cli_compat: bool,
+
+    /// signal-cli compat: data directory root (signal-cli's --config).
+    /// Combined with --user to locate the account database.
+    #[clap(long, global = true, conflicts_with_all = ["db_path", "account"])]
+    config: Option<PathBuf>,
+
+    /// signal-cli compat: account selector (signal-cli's --user/-u).
+    #[clap(long, short = 'u', global = true)]
+    user: Option<String>,
+
+    /// signal-cli compat: accepted and ignored. presage always trusts new
+    /// identities, matching signal-cli's `always` mode.
+    #[clap(long, global = true, value_name = "MODE", hide = true)]
+    trust_new_identities: Option<String>,
 
     /// Passphrase to encrypt the local state database.
     #[clap(long, short = 'p', global = true)]
@@ -109,6 +129,7 @@ enum Command {
     },
     /// JSON-RPC 2.0 daemon on stdin/stdout, streaming incoming messages
     /// as notifications.
+    #[clap(alias = "jsonRpc")]
     Jsonrpc {
         /// Directory to download attachments into (downloads off when unset).
         #[clap(long)]
@@ -159,22 +180,29 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let db_path = match (&args.db_path, &args.account) {
-        (Some(path), _) => path.clone(),
-        (None, Some(account)) => app::account_db_path(account)?,
-        (None, None) => app::default_db_path(),
+    let db_path = match (&args.db_path, &args.account, &args.config) {
+        (Some(path), _, _) => path.clone(),
+        (None, Some(account), _) => app::account_db_path(account)?,
+        (None, None, Some(config)) => app::compat_db_path(config, args.user.as_deref())?,
+        (None, None, None) => app::default_db_path(),
     };
     let store = app::open_store(&db_path, args.passphrase.as_deref()).await?;
 
     let local = tokio::task::LocalSet::new();
-    local.run_until(run(args.command, store)).await
+    local
+        .run_until(run(args.command, store, args.signal_cli_compat))
+        .await
 }
 
 fn print_json(value: &Value) {
     println!("{value}");
 }
 
-async fn run(command: Command, store: presage_store_sqlite::SqliteStore) -> Result<()> {
+async fn run(
+    command: Command,
+    store: presage_store_sqlite::SqliteStore,
+    signal_cli_compat: bool,
+) -> Result<()> {
     match command {
         Command::LinkDevice {
             servers,
@@ -278,6 +306,7 @@ async fn run(command: Command, store: presage_store_sqlite::SqliteStore) -> Resu
                     stop_after_empty_queue,
                     attachments_dir,
                     auto_accept,
+                    download_before_emit: false,
                 },
                 |event| event.emit(),
             )
@@ -288,7 +317,7 @@ async fn run(command: Command, store: presage_store_sqlite::SqliteStore) -> Resu
             auto_accept,
         } => {
             let manager = Manager::load_registered(store).await?;
-            rpc::run(manager, attachments_dir, auto_accept).await?;
+            rpc::run(manager, attachments_dir, auto_accept, signal_cli_compat).await?;
         }
         Command::Schema { .. } | Command::ListAccounts => {
             unreachable!("handled before store setup")

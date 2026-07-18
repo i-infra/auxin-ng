@@ -14,6 +14,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 
 use crate::app::{self, App, ReceiveOptions, Recipient};
+use crate::compat;
 
 #[derive(Deserialize)]
 struct Request {
@@ -88,6 +89,7 @@ pub async fn run(
     manager: App,
     attachments_dir: Option<PathBuf>,
     auto_accept: bool,
+    signal_cli_compat: bool,
 ) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
 
@@ -98,19 +100,40 @@ pub async fn run(
         }
     });
 
+    // In compat mode, message events are reshaped into signal-cli `receive`
+    // notifications by a separate task (it needs async store lookups).
+    let event_tx = if signal_cli_compat {
+        let account = manager.registration_data().phone_number.to_string();
+        let (event_tx, event_rx) = mpsc::unbounded_channel::<Value>();
+        tokio::task::spawn_local(compat::notify_task(
+            manager.clone(),
+            account,
+            event_rx,
+            tx.clone(),
+        ));
+        Some(event_tx)
+    } else {
+        None
+    };
+
     // Incoming messages stream as notifications from a cloned manager.
     let notify_tx = tx.clone();
     let mut receive_manager = manager.clone();
-    tokio::task::spawn_local(async move {
+    let receive_task = tokio::task::spawn_local(async move {
         let result = app::receive(
             &mut receive_manager,
             ReceiveOptions {
                 stop_after_empty_queue: false,
                 attachments_dir,
                 auto_accept,
+                download_before_emit: signal_cli_compat,
             },
             |event| {
                 let value = event.to_value();
+                if let Some(event_tx) = &event_tx {
+                    let _ = event_tx.send(value);
+                    return;
+                }
                 let method = value
                     .get("type")
                     .and_then(Value::as_str)
@@ -156,8 +179,50 @@ pub async fn run(
         };
 
         let reply = match request.method.as_str() {
+            // signal-cli dialect: `send` params differ from the native shape
+            // (base64 group ids, sticker/end_session params), so it shadows
+            // the native method wholesale.
+            "send" if signal_cli_compat => response(
+                request.id,
+                compat::handle_send(&mut manager, request.params).await,
+            ),
+            "sendReaction" if signal_cli_compat => response(
+                request.id,
+                compat::handle_send_reaction(&mut manager, request.params).await,
+            ),
+            "sendTyping" if signal_cli_compat => response(
+                request.id,
+                compat::handle_send_typing(&mut manager, request.params).await,
+            ),
+            "sendPaymentNotification" if signal_cli_compat => response(
+                request.id,
+                compat::handle_send_payment_notification(&mut manager, request.params).await,
+            ),
+            "updateProfile" if signal_cli_compat => response(
+                request.id,
+                compat::handle_update_profile(&mut manager, request.params).await,
+            ),
+            "updateAccount" if signal_cli_compat => response(
+                request.id,
+                compat::handle_update_account(&mut manager, request.params).await,
+            ),
+            "listContacts" if signal_cli_compat => response(
+                request.id,
+                compat::handle_list_contacts(&mut manager, request.params).await,
+            ),
             "send" => response(request.id, handle_send(&mut manager, request.params).await),
             "whoami" => response(request.id, app::whoami(&manager).await),
+            "getProfile" => {
+                let recipient = request
+                    .params
+                    .get("recipient")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                response(
+                    request.id,
+                    app::get_profile(&mut manager, recipient.as_deref()).await,
+                )
+            }
             "listContacts" => response(request.id, app::list_contacts(&manager).await),
             "listGroups" => response(request.id, app::list_groups(&manager).await),
             "version" => response(
@@ -169,6 +234,9 @@ pub async fn run(
         let _ = tx.send(reply.to_string());
     }
 
+    // stdin is closed: stop the receive loop (it holds a writer clone, so
+    // the writer would otherwise never drain) and flush pending output.
+    receive_task.abort();
     drop(tx);
     let _ = writer.await;
     Ok(())

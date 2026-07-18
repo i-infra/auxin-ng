@@ -53,6 +53,24 @@ pub fn account_db_path(name: &str) -> Result<PathBuf> {
     Ok(accounts_dir().join(format!("{name}.db3")))
 }
 
+/// signal-cli compat: database path under `--config <dir>`, selected by
+/// `--user <account>`. signal-cli accounts are phone numbers, so `+` is
+/// allowed in addition to the usual account-name characters.
+pub fn compat_db_path(config: &Path, user: Option<&str>) -> Result<PathBuf> {
+    let Some(user) = user else {
+        return Ok(config.join("auxin.db3"));
+    };
+    if user.is_empty()
+        || !user
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '+'))
+        || user.starts_with('.')
+    {
+        bail!("--user may only contain [A-Za-z0-9+._-] and must not start with a dot");
+    }
+    Ok(config.join("accounts").join(format!("{user}.db3")))
+}
+
 /// Inventory of local account databases: the default db plus everything
 /// under the accounts directory. Reads registration data only — no network.
 pub async fn list_accounts() -> Value {
@@ -276,6 +294,10 @@ pub struct ReceiveOptions {
     /// and share our profile key, so new conversations get our profile
     /// details without a manual accept.
     pub auto_accept: bool,
+    /// Download attachments before emitting the message event, recording the
+    /// local paths on the event itself (signal-cli compat needs the paths in
+    /// the envelope). Off, downloads happen after the message is emitted.
+    pub download_before_emit: bool,
 }
 
 /// Stream incoming messages, invoking `on_event` for each JSONL event.
@@ -326,7 +348,15 @@ pub async fn receive(
                 }
                 Received::Contacts => on_event(Event::ContactsSynced),
                 Received::Content(content) => {
-                    on_event(Event::message(&content));
+                    let mut downloads = Vec::new();
+                    if options.download_before_emit {
+                        if let Some(dir) = &options.attachments_dir {
+                            downloads =
+                                download_attachments(manager, dir, &content, &mut on_event)
+                                    .await;
+                        }
+                    }
+                    on_event(Event::message(&content, downloads));
                     if options.auto_accept {
                         auto_accept(
                             &mut sender_manager,
@@ -337,8 +367,10 @@ pub async fn receive(
                         )
                         .await;
                     }
-                    if let Some(dir) = &options.attachments_dir {
-                        download_attachments(manager, dir, &content, &mut on_event).await;
+                    if !options.download_before_emit {
+                        if let Some(dir) = &options.attachments_dir {
+                            download_attachments(manager, dir, &content, &mut on_event).await;
+                        }
                     }
                 }
             }
@@ -414,16 +446,21 @@ async fn auto_accept(
     on_event(Event::Accepted { sender });
 }
 
+/// Download every attachment on a data message into `dir`, emitting an
+/// `attachmentDownloaded` event per file. Returns the local paths keyed by
+/// the attachment's index in `DataMessage.attachments` (failed downloads
+/// are absent).
 async fn download_attachments(
     manager: &App,
     dir: &Path,
     content: &Content,
     on_event: &mut impl FnMut(Event),
-) {
+) -> Vec<crate::emit::DownloadedAttachment> {
+    let mut downloads = Vec::new();
     let ContentBody::DataMessage(DataMessage { attachments, .. }) = &content.body else {
-        return;
+        return downloads;
     };
-    for pointer in attachments {
+    for (index, pointer) in attachments.iter().enumerate() {
         let data = match manager.get_attachment(pointer).await {
             Ok(data) => data,
             Err(error) => {
@@ -445,18 +482,25 @@ async fn download_attachments(
             .unwrap_or_else(|| format!("attachment-{timestamp}"));
         let path = dir.join(format!("{timestamp}-{base}.{extension}"));
         match tokio::fs::write(&path, &data).await {
-            Ok(()) => on_event(Event::AttachmentDownloaded {
-                sender: content.metadata.sender.service_id_string(),
-                timestamp,
-                path: path.display().to_string(),
-                content_type: pointer.content_type.clone(),
-                file_name: pointer.file_name.clone(),
-            }),
+            Ok(()) => {
+                downloads.push(crate::emit::DownloadedAttachment {
+                    index,
+                    path: path.display().to_string(),
+                });
+                on_event(Event::AttachmentDownloaded {
+                    sender: content.metadata.sender.service_id_string(),
+                    timestamp,
+                    path: path.display().to_string(),
+                    content_type: pointer.content_type.clone(),
+                    file_name: pointer.file_name.clone(),
+                });
+            }
             Err(error) => on_event(Event::Error {
                 message: format!("failed to write attachment {}: {error:#}", path.display()),
             }),
         }
     }
+    downloads
 }
 
 /// JSON summaries of local store data.
@@ -494,6 +538,49 @@ pub async fn list_groups(manager: &App) -> Result<Value> {
         })
         .collect();
     Ok(Value::Array(groups))
+}
+
+/// Fetch a profile (own when `recipient` is `None`), bypassing the local
+/// cache, as JSON. `mobileCoinAddress` is only present when its signature
+/// verified against the profile owner's identity key.
+pub async fn get_profile(manager: &mut App, recipient: Option<&str>) -> Result<Value> {
+    let (uuid, profile_key) = match recipient {
+        None => {
+            let data = manager.registration_data();
+            (data.service_ids.aci, data.profile_key())
+        }
+        Some(id) => {
+            let service_id = parse_service_id(id)?;
+            let uuid = uuid::Uuid::from_bytes(service_id.raw_uuid().into_bytes());
+            let contact = manager
+                .store()
+                .contact_by_id(&service_id)
+                .await?
+                .with_context(|| format!("no known contact {id}"))?;
+            let key_bytes: [u8; 32] = contact
+                .profile_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("no profile key stored for {id}"))?;
+            (
+                uuid,
+                presage::libsignal_service::zkgroup::profiles::ProfileKey::create(key_bytes),
+            )
+        }
+    };
+    let profile = manager
+        .retrieve_profile_by_uuid_uncached(uuid, profile_key)
+        .await?;
+    Ok(serde_json::json!({
+        "uuid": uuid.to_string(),
+        "givenName": profile.name.as_ref().map(|n| n.given_name.clone()),
+        "familyName": profile.name.as_ref().and_then(|n| n.family_name.clone()),
+        "about": profile.about,
+        "aboutEmoji": profile.about_emoji,
+        "avatar": profile.avatar,
+        "mobileCoinAddress":
+            crate::compat::mobile_coin_address_b64(profile.payment_address.as_deref()),
+    }))
 }
 
 pub async fn whoami(manager: &App) -> Result<Value> {

@@ -39,6 +39,14 @@ impl From<&Content> for JsonEnvelope {
     }
 }
 
+/// A locally downloaded attachment, keyed by its index in
+/// `DataMessage.attachments`.
+#[derive(Serialize, Clone)]
+pub struct DownloadedAttachment {
+    pub index: usize,
+    pub path: String,
+}
+
 /// A single JSONL event. `content` is the canonical proto-JSON of the
 /// message body; `content_type` names its protobuf type in camelCase.
 #[derive(Serialize)]
@@ -49,6 +57,10 @@ pub enum Event {
         envelope: JsonEnvelope,
         content_type: &'static str,
         content: Value,
+        /// Local paths of pre-downloaded attachments (only populated when
+        /// downloads happen before emission, i.e. signal-cli compat mode).
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        downloads: Vec<DownloadedAttachment>,
     },
     #[serde(rename = "queueEmpty")]
     QueueEmpty,
@@ -75,12 +87,13 @@ pub enum Event {
 }
 
 impl Event {
-    pub fn message(content: &Content) -> Event {
+    pub fn message(content: &Content, downloads: Vec<DownloadedAttachment>) -> Event {
         match proto_json::body_to_json(&content.body) {
             Ok((content_type, json)) => Event::Message {
                 envelope: content.into(),
                 content_type,
                 content: json,
+                downloads,
             },
             Err(error) => Event::Error {
                 message: format!("failed to serialize message body: {error:#}"),
