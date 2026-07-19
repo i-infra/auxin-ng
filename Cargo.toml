@@ -6,8 +6,11 @@ license = "AGPL-3.0-only"
 description = "Scriptable, protocol-transparent Signal CLI built on presage"
 
 [dependencies]
-presage = { git = "https://github.com/whisperfish/presage", rev = "63482efd0cbdc0780baf0650517c7d55f1cac05d" }
-presage-store-sqlite = { git = "https://github.com/whisperfish/presage", rev = "63482efd0cbdc0780baf0650517c7d55f1cac05d" }
+# i-infra forks carry profile avatar/payment-address and username support
+# on top of upstream whisperfish revs (63482ef / fd48165); see
+# docs/signal-cli-compat.md and docs/username-support.md.
+presage = { git = "https://github.com/i-infra/presage", branch = "profile-extended" }
+presage-store-sqlite = { git = "https://github.com/i-infra/presage", branch = "profile-extended" }
 
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "io-std", "io-util", "fs", "time"] }
 futures = "0.3"
@@ -32,14 +35,17 @@ uuid = "1"
 protox = "0.9"
 prost = "0.14"
 
-# Local patched checkouts (pinned revs + our profile avatar / payment
-# address work, pending upstreaming). See docs/signal-cli-compat.md gaps.
-[patch."https://github.com/whisperfish/presage"]
-presage = { path = "../presage/presage" }
-presage-store-sqlite = { path = "../presage/presage-store-sqlite" }
-
+# presage's manifest points at upstream whisperfish/libsignal-service-rs;
+# redirect it to the i-infra fork carrying our profile/username work.
 [patch."https://github.com/whisperfish/libsignal-service-rs"]
-libsignal-service = { path = "../libsignal-service-rs" }
+libsignal-service = { git = "https://github.com/i-infra/libsignal-service-rs", branch = "profile-avatar-payment-address" }
+
+# For local development against sibling checkouts, use instead:
+# [patch."https://github.com/i-infra/presage"]
+# presage = { path = "../presage/presage" }
+# presage-store-sqlite = { path = "../presage/presage-store-sqlite" }
+# [patch."https://github.com/i-infra/libsignal-service-rs"]
+# libsignal-service = { path = "../libsignal-service-rs" }
 
 # presage's workspace applies these patches; they don't propagate to consumers,
 # so every downstream workspace has to repeat them (see presage README).

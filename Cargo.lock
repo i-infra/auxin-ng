@@ -1732,6 +1732,7 @@ dependencies = [
 [[package]]
 name = "libsignal-service"
 version = "0.1.0"
+source = "git+https://github.com/i-infra/libsignal-service-rs?branch=profile-avatar-payment-address#d5954c5bcff71de16b0e7fdb0d5c0db2b38e64f5"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2286,6 +2287,7 @@ dependencies = [
 [[package]]
 name = "presage"
 version = "0.8.0-dev"
+source = "git+https://github.com/i-infra/presage?branch=profile-extended#eb86be34d64abc5941f97e39d290483c78b11336"
 dependencies = [
  "base64",
  "bytes",
@@ -2307,6 +2309,7 @@ dependencies = [
 [[package]]
 name = "presage-store-sqlite"
 version = "0.8.0-dev"
+source = "git+https://github.com/i-infra/presage?branch=profile-extended#eb86be34d64abc5941f97e39d290483c78b11336"
 dependencies = [
  "async-trait",
  "bytes",
