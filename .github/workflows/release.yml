@@ -27,6 +27,9 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      # libsignal's spqr crate validates its protobufs with protoc.
+      - name: Install protoc
+        run: brew install protobuf
       # rustup reads rust-toolchain.toml and installs the pinned version.
       - name: Build
         run: |

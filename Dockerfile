@@ -2,6 +2,10 @@
 # stripped release binary into dist/; the default target is a minimal
 # runnable image. Toolchain version matches rust-toolchain.toml.
 FROM rust:1.97-bookworm AS build
+# libsignal's spqr crate validates its protobufs with protoc at build time.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY . .
 RUN cargo build --release --locked \
