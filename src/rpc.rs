@@ -225,6 +225,19 @@ pub async fn run(
             }
             "listContacts" => response(request.id, app::list_contacts(&manager).await),
             "listGroups" => response(request.id, app::list_groups(&manager).await),
+            "lookupUsername" => {
+                let result = match request.params.get("username").and_then(Value::as_str) {
+                    Some(username) => manager
+                        .lookup_username(username)
+                        .await
+                        .map(|aci| {
+                            json!({"uuid": aci.map(|aci| aci.service_id_string())})
+                        })
+                        .map_err(Into::into),
+                    None => Err(anyhow::anyhow!("missing `username` param")),
+                };
+                response(request.id, result)
+            }
             "version" => response(
                 request.id,
                 Ok(json!({"name": "auxin-ng", "version": env!("CARGO_PKG_VERSION")})),

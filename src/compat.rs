@@ -385,11 +385,32 @@ pub async fn handle_update_profile(manager: &mut App, params: Value) -> Result<V
     Ok(result)
 }
 
-pub async fn handle_update_account(_manager: &mut App, _params: Value) -> Result<Value> {
-    bail!(
-        "updateAccount is not supported: libsignal-service-rs has no username \
-         reserve/confirm endpoints yet"
-    )
+#[derive(Deserialize)]
+struct UpdateAccountParams {
+    username: Option<String>,
+    #[serde(rename = "deleteUsername", alias = "delete-username", default)]
+    delete_username: bool,
+}
+
+/// signal-cli's `updateAccount`: forest uses only the `username` param and
+/// reads back `result.usernameLink` for `/signalme`.
+pub async fn handle_update_account(manager: &mut App, params: Value) -> Result<Value> {
+    let params: UpdateAccountParams = serde_json::from_value(params)?;
+    match (params.username, params.delete_username) {
+        (Some(_), true) => bail!("pass either `username` or `deleteUsername`, not both"),
+        (Some(username), false) => {
+            let data = manager.set_username(&username).await?;
+            Ok(json!({
+                "username": data.username,
+                "usernameLink": data.link().map(|url| url.to_string()),
+            }))
+        }
+        (None, true) => {
+            manager.delete_username().await?;
+            Ok(json!({}))
+        }
+        (None, false) => Ok(json!({})),
+    }
 }
 
 pub async fn handle_list_contacts(manager: &mut App, params: Value) -> Result<Value> {
@@ -878,6 +899,20 @@ mod tests {
         assert_eq!(envelope["typingMessage"]["action"], "STARTED");
         assert_eq!(envelope["typingMessage"]["timestamp"], 5);
         assert!(envelope.get("dataMessage").is_none());
+    }
+
+    #[test]
+    fn update_account_params_parse() {
+        // forest: signal_rpc_request("updateAccount", username=username)
+        let set: UpdateAccountParams =
+            serde_json::from_value(json!({"username": "ada"})).unwrap();
+        assert_eq!(set.username.as_deref(), Some("ada"));
+        assert!(!set.delete_username);
+
+        let del: UpdateAccountParams =
+            serde_json::from_value(json!({"delete-username": true})).unwrap();
+        assert!(del.username.is_none());
+        assert!(del.delete_username);
     }
 
     #[test]
