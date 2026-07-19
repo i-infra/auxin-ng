@@ -1,5 +1,11 @@
 # Username / `updateAccount` support — research & plan
 
+> **Status: implemented and live-verified 2026-07-19.** The `/v1` prefix
+> question resolved in favor of `/v1` (production accepted reserve/confirm
+> first try). Set `auxin.27` on the test account, resolved it publicly back
+> to our ACI, and re-confirmed with a stable link URL. Landed as
+> libsignal-service-rs `d5954c5`, presage `eb86be3`, auxin-ng `c9ea4b3`.
+
 Research notes for closing gap #10 in [signal-cli-compat.md](signal-cli-compat.md)
 (forest's `/signalme` flow: `updateAccount {username}` → reads back
 `result.usernameLink`). Sources: signal-cli + signal-service-java (javap of

@@ -163,11 +163,17 @@ Upstream in presage / libsignal-service-rs:
    `listContacts` emits `profile.mobileCoinAddress` as base64 of the raw
    verified MobileCoin public address, like signal-cli. Live-verified
    2026-07-18 (set → read-back-verified → clear).
-10. **Username set + usernameLink** — still open, but researched and
-    smaller than assumed: the `usernames` crate (already a dependency)
-    has all the crypto, and lookup + link endpoints already exist in
-    libsignal-service-rs; only reserve/confirm/delete wrappers and
-    orchestration are missing. Plan: [username-support.md](username-support.md).
+10. ~~**Username set + usernameLink**~~ — **implemented** across the local
+    forks (research + design: [username-support.md](username-support.md)):
+    reserve/confirm/delete endpoints in libsignal-service-rs (`/v1/`
+    prefix confirmed against production), `presage
+    Manager::{set_username, delete_username, username}` with kv-store
+    persistence and link-entropy reclaim, and compat
+    `updateAccount {username}` → `{username, usernameLink}` (plus
+    `{deleteUsername: true}` and a native `lookupUsername` method).
+    Live-verified 2026-07-19: set `auxin.27`, resolved it back to our
+    own ACI via public lookup, and re-confirmed with a byte-identical
+    link URL (reclaim path).
 
 Not needed by forest, known absent (unchanged from before): group management,
 profile/contact/device/identity management commands, polls, sendReceipt
