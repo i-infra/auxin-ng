@@ -78,6 +78,10 @@ pub enum Event {
     },
     #[serde(rename = "error")]
     Error { message: String },
+    /// A message from this sender failed to decrypt; a session reset with
+    /// them may be needed.
+    #[serde(rename = "decryptionError")]
+    DecryptionError { sender: String },
     /// The server dropped the websocket; a new connection is being made.
     #[serde(rename = "reconnecting")]
     Reconnecting { attempt: u32, delay_ms: u64 },

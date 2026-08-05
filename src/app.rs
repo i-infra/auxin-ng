@@ -347,6 +347,9 @@ pub async fn receive(
                     }
                 }
                 Received::Contacts => on_event(Event::ContactsSynced),
+                Received::DecryptionError(sender) => on_event(Event::DecryptionError {
+                    sender: sender.service_id_string(),
+                }),
                 Received::Content(content) => {
                     let mut downloads = Vec::new();
                     if options.download_before_emit {

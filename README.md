@@ -79,6 +79,7 @@ independent. `list-accounts` reports encrypted databases as unreadable
 {"type":"contactsSynced"}
 {"type":"attachmentDownloaded","sender":"...","timestamp":1752650000000,"path":"...","contentType":"image/jpeg","fileName":"cat.jpg"}
 {"type":"error","message":"..."}
+{"type":"decryptionError","sender":"..."}
 {"type":"reconnecting","attempt":1,"delayMs":1000}
 ```
 

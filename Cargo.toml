@@ -7,8 +7,8 @@ description = "Scriptable, protocol-transparent Signal CLI built on presage"
 
 [dependencies]
 # i-infra forks carry profile avatar/payment-address and username support
-# on top of upstream whisperfish revs (63482ef / fd48165); see
-# docs/signal-cli-compat.md and docs/username-support.md.
+# on top of upstream whisperfish revs (f74b96e / bb43e81, libsignal 0.99);
+# see docs/signal-cli-compat.md and docs/username-support.md.
 presage = { git = "https://github.com/i-infra/presage", branch = "profile-extended" }
 presage-store-sqlite = { git = "https://github.com/i-infra/presage", branch = "profile-extended" }
 
@@ -40,15 +40,15 @@ prost = "0.14"
 [patch."https://github.com/whisperfish/libsignal-service-rs"]
 libsignal-service = { git = "https://github.com/i-infra/libsignal-service-rs", branch = "profile-avatar-payment-address" }
 
-# For local development against sibling checkouts, use instead:
+# For local development against sibling checkouts, comment out the patch
+# above and use instead:
 # [patch."https://github.com/i-infra/presage"]
 # presage = { path = "../presage/presage" }
 # presage-store-sqlite = { path = "../presage/presage-store-sqlite" }
-# [patch."https://github.com/i-infra/libsignal-service-rs"]
+# [patch."https://github.com/whisperfish/libsignal-service-rs"]
 # libsignal-service = { path = "../libsignal-service-rs" }
 
 # presage's workspace applies these patches; they don't propagate to consumers,
 # so every downstream workspace has to repeat them (see presage README).
 [patch.crates-io]
-curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag = "signal-curve25519-4.1.3" }
 libsqlite3-sys = { version = "0.36.0", git = "https://github.com/whisperfish/rusqlite", rev = "2a42b3354c9194700d08aa070f70a131a470e7dc" }
