@@ -298,6 +298,9 @@ pub struct ReceiveOptions {
     /// local paths on the event itself (signal-cli compat needs the paths in
     /// the envelope). Off, downloads happen after the message is emitted.
     pub download_before_emit: bool,
+    /// Send a delivery receipt for every incoming message, including group
+    /// messages. Without it senders never see the second checkmark.
+    pub send_receipts: bool,
 }
 
 /// Stream incoming messages, invoking `on_event` for each JSONL event.
@@ -360,6 +363,11 @@ pub async fn receive(
                         }
                     }
                     on_event(Event::message(&content, downloads));
+                    // Acknowledge before any attachment work, so a slow or
+                    // failing download never delays the sender's checkmark.
+                    if options.send_receipts && should_send_receipt(&content, &own_aci) {
+                        send_delivery_receipt(&mut sender_manager, &content, &mut on_event).await;
+                    }
                     if options.auto_accept {
                         auto_accept(
                             &mut sender_manager,
@@ -394,6 +402,61 @@ async fn backoff(attempt: u32, on_event: &mut impl FnMut(Event)) -> u32 {
     attempt + 1
 }
 
+/// Send a delivery receipt for a received message.
+///
+/// Without this the sender's client shows one checkmark (accepted by the
+/// server) and never advances to two (delivered to the recipient). Signal
+/// expects the receipt to reference the *original message's* timestamp, which
+/// is how the sender matches it to the message it acknowledges — the outer
+/// envelope timestamp is a fresh one for the receipt itself.
+///
+/// Receipts go to the message's author directly, never to the group: a group
+/// message still yields one receipt per recipient, addressed to the sender.
+async fn send_delivery_receipt(
+    manager: &mut App,
+    content: &Content,
+    on_event: &mut impl FnMut(Event),
+) {
+    let sender = content.metadata.sender;
+    let message_timestamp = content.metadata.timestamp.timestamp_millis() as u64;
+
+    let receipt = ContentBody::ReceiptMessage(presage::proto::ReceiptMessage {
+        r#type: Some(presage::proto::receipt_message::Type::Delivery as i32),
+        timestamp: vec![message_timestamp],
+    });
+
+    if let Err(error) = manager
+        .send_message(sender, receipt, now_millis())
+        .await
+    {
+        on_event(Event::Error {
+            message: format!(
+                "delivery receipt to {} failed: {error:#}",
+                sender.service_id_string()
+            ),
+        });
+    }
+}
+
+/// Whether a received message warrants a delivery receipt.
+///
+/// Only actual messages from other people do. Receipts, typing indicators,
+/// sync messages and our own echoes must not be acknowledged — receipting a
+/// receipt would bounce back and forth forever.
+///
+/// Note this deliberately ignores the envelope's `needs_receipt` flag: it is
+/// set on incoming receipts too, so keying off it would create exactly the
+/// loop above.
+fn should_send_receipt(content: &Content, own_aci: &str) -> bool {
+    if content.metadata.sender.service_id_string() == own_aci {
+        return false;
+    }
+    matches!(
+        content.body,
+        ContentBody::DataMessage(_) | ContentBody::EditMessage(_)
+    )
+}
+
 /// "Accept" a first contact from a new sender: acknowledge with a delivery
 /// receipt and share our profile key (a `PROFILE_KEY_UPDATE` data message),
 /// which is what lets the peer decrypt our profile name/details.
@@ -418,12 +481,7 @@ async fn auto_accept(
     accepted.insert(sender.clone());
 
     let service_id = content.metadata.sender;
-    let message_timestamp = content.metadata.timestamp.timestamp_millis() as u64;
 
-    let receipt = ContentBody::ReceiptMessage(presage::proto::ReceiptMessage {
-        r#type: Some(presage::proto::receipt_message::Type::Delivery as i32),
-        timestamp: vec![message_timestamp],
-    });
     let profile_share = ContentBody::DataMessage(DataMessage {
         profile_key: Some(
             manager
@@ -437,14 +495,17 @@ async fn auto_accept(
         ..Default::default()
     });
 
-    for body in [receipt, profile_share] {
-        let timestamp = now_millis();
-        if let Err(error) = manager.send_message(service_id, body, timestamp).await {
-            on_event(Event::Error {
-                message: format!("auto-accept send to {sender} failed: {error:#}"),
-            });
-            return;
-        }
+    // The delivery receipt is sent by the receive loop for every message, so
+    // auto-accept only has to share our profile key here.
+    let timestamp = now_millis();
+    if let Err(error) = manager
+        .send_message(service_id, profile_share, timestamp)
+        .await
+    {
+        on_event(Event::Error {
+            message: format!("auto-accept send to {sender} failed: {error:#}"),
+        });
+        return;
     }
     on_event(Event::Accepted { sender });
 }
@@ -531,16 +592,206 @@ pub async fn list_groups(manager: &App) -> Result<Value> {
         .await?
         .filter_map(|g| g.ok())
         .map(|(master_key, group)| {
+            let members: Vec<Value> = group
+                .members
+                .iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "uuid": m.aci.service_id_string(),
+                        "role": role_name(m.role),
+                    })
+                })
+                .collect();
+            let pending_members: Vec<Value> = group
+                .pending_members
+                .iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "uuid": m.uuid.to_string(),
+                        "role": role_name(m.role),
+                        "addedBy": m.added_by_aci.service_id_string(),
+                    })
+                })
+                .collect();
             serde_json::json!({
                 "masterKey": hex::encode(master_key),
                 "title": group.title,
                 "description": group.description,
                 "revision": group.revision,
                 "memberCount": group.members.len(),
+                "members": members,
+                "pendingMembers": pending_members,
             })
         })
         .collect();
     Ok(Value::Array(groups))
+}
+
+fn role_name(role: presage::libsignal_service::groups_v2::Role) -> &'static str {
+    use presage::libsignal_service::groups_v2::Role;
+    match role {
+        Role::Administrator => "ADMINISTRATOR",
+        Role::Default => "DEFAULT",
+        Role::Unknown => "UNKNOWN",
+    }
+}
+
+/// Creates a group and returns its master key hex — the handle every other
+/// group method takes.
+///
+/// Members we hold no profile key for are invited as pending members rather
+/// than added outright; they show up under `pendingMembers` in `listGroups`
+/// until they accept.
+pub async fn create_group(
+    manager: &mut App,
+    title: &str,
+    description: Option<&str>,
+    members: Vec<String>,
+    timer_seconds: Option<u32>,
+) -> Result<Value> {
+    let members = members
+        .iter()
+        .map(parse_service_id)
+        .collect::<Result<Vec<_>>>()?;
+
+    let timer = timer_seconds.map(|duration| presage::libsignal_service::prelude::Timer {
+        duration,
+    });
+
+    let master_key = manager
+        .create_group(title, description, members, timer)
+        .await?;
+
+    Ok(serde_json::json!({
+        "masterKey": hex::encode(master_key),
+        "title": title,
+    }))
+}
+
+/// Leaves a group. Refuses if we are its last admin unless `force` is set,
+/// since an admin-less group can never be modified again.
+pub async fn leave_group(manager: &mut App, group: &str, force: bool) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    manager.leave_group(&master_key, force).await?;
+    Ok(serde_json::json!({
+        "masterKey": group,
+        "left": true,
+    }))
+}
+
+/// Adds members to a group. Anyone whose profile key we don't hold is invited
+/// as a pending member instead; already-present members are skipped.
+pub async fn add_group_members(
+    manager: &mut App,
+    group: &str,
+    members: Vec<String>,
+) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    let members = members
+        .iter()
+        .map(parse_service_id)
+        .collect::<Result<Vec<_>>>()?;
+    manager.add_group_members(&master_key, members).await?;
+    group_result(manager, group, &master_key).await
+}
+
+/// Removes members from a group. Members not in the group are skipped.
+pub async fn remove_group_members(
+    manager: &mut App,
+    group: &str,
+    members: Vec<String>,
+) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    let acis = members
+        .iter()
+        .map(parse_aci)
+        .collect::<Result<Vec<_>>>()?;
+    manager.remove_group_members(&master_key, acis).await?;
+    group_result(manager, group, &master_key).await
+}
+
+pub async fn set_group_title(manager: &mut App, group: &str, title: &str) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    manager.set_group_title(&master_key, title).await?;
+    group_result(manager, group, &master_key).await
+}
+
+pub async fn set_group_description(
+    manager: &mut App,
+    group: &str,
+    description: Option<&str>,
+) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    manager
+        .set_group_description(&master_key, description)
+        .await?;
+    group_result(manager, group, &master_key).await
+}
+
+/// Sets the disappearing-message timer in seconds; `None` (or 0) disables it.
+pub async fn set_group_timer(
+    manager: &mut App,
+    group: &str,
+    seconds: Option<u32>,
+) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    let timer = match seconds {
+        None | Some(0) => None,
+        Some(duration) => Some(presage::libsignal_service::prelude::Timer { duration }),
+    };
+    manager.set_group_timer(&master_key, timer).await?;
+    group_result(manager, group, &master_key).await
+}
+
+/// Promotes a member to `ADMINISTRATOR` or demotes them to `DEFAULT`.
+pub async fn set_group_member_role(
+    manager: &mut App,
+    group: &str,
+    member: &str,
+    role: &str,
+) -> Result<Value> {
+    use presage::libsignal_service::groups_v2::Role;
+
+    let master_key = parse_group_master_key(group)?;
+    let aci = parse_aci(member)?;
+    let role = match role.to_ascii_uppercase().as_str() {
+        "ADMINISTRATOR" | "ADMIN" => Role::Administrator,
+        "DEFAULT" | "MEMBER" => Role::Default,
+        other => bail!("unknown role {other}; expected ADMINISTRATOR or DEFAULT"),
+    };
+    manager
+        .set_group_member_role(&master_key, aci, role)
+        .await?;
+    group_result(manager, group, &master_key).await
+}
+
+/// Accepts an outstanding invitation, promoting our pending entry to a full
+/// membership.
+pub async fn accept_group_invite(manager: &mut App, group: &str) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    manager.accept_group_invite(&master_key).await?;
+    group_result(manager, group, &master_key).await
+}
+
+/// A service ID that must be an ACI — group membership is keyed by ACI, so a
+/// PNI here is a caller mistake worth naming.
+fn parse_aci(input: &str) -> Result<presage::libsignal_service::protocol::Aci> {
+    match parse_service_id(input)? {
+        ServiceId::Aci(aci) => Ok(aci),
+        ServiceId::Pni(_) => bail!("{input} is a PNI; group members are identified by ACI"),
+    }
+}
+
+/// Post-mutation view of a group, read back from the store so callers see the
+/// applied result rather than just an acknowledgement.
+async fn group_result(manager: &App, group: &str, master_key: &GroupMasterKeyBytes) -> Result<Value> {
+    let stored = manager.store().group(*master_key).await.ok().flatten();
+    Ok(serde_json::json!({
+        "masterKey": group,
+        "title": stored.as_ref().map(|g| g.title.clone()),
+        "revision": stored.as_ref().map(|g| g.revision),
+        "memberCount": stored.as_ref().map(|g| g.members.len()),
+    }))
 }
 
 /// Fetch a profile (own when `recipient` is `None`), bypassing the local
@@ -594,4 +845,89 @@ pub async fn whoami(manager: &App) -> Result<Value> {
         "number": whoami.number.to_string(),
         "deviceId": u32::from(manager.device_id()),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use presage::libsignal_service::content::Metadata;
+    use presage::libsignal_service::protocol::{Aci, DeviceId};
+
+    const OWN: &str = "38b0b933-925a-43ac-849d-e19528ec8d08";
+    const OTHER: &str = "471c2cac-72e2-4157-9878-759ac84b397f";
+
+    fn content(sender: &str, body: ContentBody) -> Content {
+        let aci = Aci::parse_from_service_id_string(sender).expect("valid aci");
+        Content {
+            metadata: Metadata {
+                sender: aci.into(),
+                destination: aci.into(),
+                sender_device: DeviceId::new(1).unwrap(),
+                timestamp: chrono::Utc::now(),
+                server_timestamp: chrono::Utc::now(),
+                // Set on incoming receipts too, which is exactly why
+                // should_send_receipt must not key off it.
+                needs_receipt: true,
+                unidentified_sender: true,
+                was_plaintext: false,
+                server_guid: None,
+            },
+            body,
+        }
+    }
+
+    fn data_message(body: &str) -> ContentBody {
+        ContentBody::DataMessage(DataMessage {
+            body: Some(body.into()),
+            timestamp: Some(1),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn receipts_are_sent_for_messages_from_others() {
+        assert!(should_send_receipt(
+            &content(OTHER, data_message("hello")),
+            OWN
+        ));
+    }
+
+    #[test]
+    fn group_messages_still_get_receipts() {
+        // Regression: group messages were previously skipped entirely, so
+        // senders never saw a second checkmark in any group.
+        let body = ContentBody::DataMessage(DataMessage {
+            body: Some("in a group".into()),
+            group_v2: Some(presage::proto::GroupContextV2 {
+                master_key: Some(vec![0u8; 32]),
+                revision: Some(3),
+                ..Default::default()
+            }),
+            timestamp: Some(1),
+            ..Default::default()
+        });
+        assert!(should_send_receipt(&content(OTHER, body), OWN));
+    }
+
+    #[test]
+    fn receipts_are_not_sent_for_receipts() {
+        // The loop-breaker: acknowledging an acknowledgement never terminates.
+        let receipt = ContentBody::ReceiptMessage(presage::proto::ReceiptMessage {
+            r#type: Some(presage::proto::receipt_message::Type::Delivery as i32),
+            timestamp: vec![1],
+        });
+        assert!(!should_send_receipt(&content(OTHER, receipt), OWN));
+    }
+
+    #[test]
+    fn receipts_are_not_sent_for_typing_or_our_own_messages() {
+        let typing = ContentBody::TypingMessage(presage::proto::TypingMessage {
+            timestamp: Some(1),
+            ..Default::default()
+        });
+        assert!(!should_send_receipt(&content(OTHER, typing), OWN));
+
+        // Our own message echoed back to us needs no acknowledgement.
+        assert!(!should_send_receipt(&content(OWN, data_message("mine")), OWN));
+    }
 }

@@ -85,10 +85,99 @@ async fn handle_send(manager: &mut App, params: Value) -> Result<Value> {
     app::send(manager, recipient, body).await
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateGroupParams {
+    title: String,
+    #[serde(default)]
+    description: Option<String>,
+    /// Service IDs to add. Anyone whose profile key we don't hold is invited
+    /// as a pending member instead of added outright.
+    #[serde(default)]
+    members: Vec<String>,
+    /// Disappearing message timer, in seconds.
+    #[serde(default)]
+    timer: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LeaveGroupParams {
+    group: String,
+    /// Leave even if it would leave the group without an administrator.
+    #[serde(default)]
+    force: bool,
+}
+
+async fn handle_create_group(manager: &mut App, params: Value) -> Result<Value> {
+    let params: CreateGroupParams = serde_json::from_value(params)?;
+    app::create_group(
+        manager,
+        &params.title,
+        params.description.as_deref(),
+        params.members,
+        params.timer,
+    )
+    .await
+}
+
+async fn handle_leave_group(manager: &mut App, params: Value) -> Result<Value> {
+    let params: LeaveGroupParams = serde_json::from_value(params)?;
+    app::leave_group(manager, &params.group, params.force).await
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupMembersParams {
+    group: String,
+    members: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetGroupTitleParams {
+    group: String,
+    title: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetGroupDescriptionParams {
+    group: String,
+    /// Omit or pass null to clear the description.
+    #[serde(default)]
+    description: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetGroupTimerParams {
+    group: String,
+    /// Seconds; omit or pass 0 to disable disappearing messages.
+    #[serde(default)]
+    timer: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetGroupMemberRoleParams {
+    group: String,
+    member: String,
+    /// `ADMINISTRATOR` or `DEFAULT`.
+    role: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupOnlyParams {
+    group: String,
+}
+
 pub async fn run(
     manager: App,
     attachments_dir: Option<PathBuf>,
     auto_accept: bool,
+    send_receipts: bool,
     signal_cli_compat: bool,
 ) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
@@ -127,6 +216,7 @@ pub async fn run(
                 attachments_dir,
                 auto_accept,
                 download_before_emit: signal_cli_compat,
+                send_receipts,
             },
             |event| {
                 let value = event.to_value();
@@ -225,6 +315,80 @@ pub async fn run(
             }
             "listContacts" => response(request.id, app::list_contacts(&manager).await),
             "listGroups" => response(request.id, app::list_groups(&manager).await),
+            "createGroup" => response(
+                request.id,
+                handle_create_group(&mut manager, request.params).await,
+            ),
+            "leaveGroup" => response(
+                request.id,
+                handle_leave_group(&mut manager, request.params).await,
+            ),
+            "addGroupMembers" => {
+                let result = match serde_json::from_value::<GroupMembersParams>(request.params) {
+                    Ok(p) => app::add_group_members(&mut manager, &p.group, p.members).await,
+                    Err(error) => Err(error.into()),
+                };
+                response(request.id, result)
+            }
+            "removeGroupMembers" => {
+                let result = match serde_json::from_value::<GroupMembersParams>(request.params) {
+                    Ok(p) => app::remove_group_members(&mut manager, &p.group, p.members).await,
+                    Err(error) => Err(error.into()),
+                };
+                response(request.id, result)
+            }
+            "setGroupTitle" => {
+                let result = match serde_json::from_value::<SetGroupTitleParams>(request.params) {
+                    Ok(p) => app::set_group_title(&mut manager, &p.group, &p.title).await,
+                    Err(error) => Err(error.into()),
+                };
+                response(request.id, result)
+            }
+            "setGroupDescription" => {
+                let result =
+                    match serde_json::from_value::<SetGroupDescriptionParams>(request.params) {
+                        Ok(p) => {
+                            app::set_group_description(
+                                &mut manager,
+                                &p.group,
+                                p.description.as_deref(),
+                            )
+                            .await
+                        }
+                        Err(error) => Err(error.into()),
+                    };
+                response(request.id, result)
+            }
+            "setGroupTimer" => {
+                let result = match serde_json::from_value::<SetGroupTimerParams>(request.params) {
+                    Ok(p) => app::set_group_timer(&mut manager, &p.group, p.timer).await,
+                    Err(error) => Err(error.into()),
+                };
+                response(request.id, result)
+            }
+            "setGroupMemberRole" => {
+                let result =
+                    match serde_json::from_value::<SetGroupMemberRoleParams>(request.params) {
+                        Ok(p) => {
+                            app::set_group_member_role(
+                                &mut manager,
+                                &p.group,
+                                &p.member,
+                                &p.role,
+                            )
+                            .await
+                        }
+                        Err(error) => Err(error.into()),
+                    };
+                response(request.id, result)
+            }
+            "acceptGroupInvite" => {
+                let result = match serde_json::from_value::<GroupOnlyParams>(request.params) {
+                    Ok(p) => app::accept_group_invite(&mut manager, &p.group).await,
+                    Err(error) => Err(error.into()),
+                };
+                response(request.id, result)
+            }
             "lookupUsername" => {
                 let result = match request.params.get("username").and_then(Value::as_str) {
                     Some(username) => manager

@@ -126,6 +126,10 @@ enum Command {
         /// our profile key, so both sides see profile details.
         #[clap(long)]
         auto_accept: bool,
+        /// Don't send delivery receipts. Senders will never see the second
+        /// checkmark; only useful for passive observation.
+        #[clap(long)]
+        no_receipts: bool,
     },
     /// JSON-RPC 2.0 daemon on stdin/stdout, streaming incoming messages
     /// as notifications.
@@ -138,6 +142,10 @@ enum Command {
         /// our profile key, so both sides see profile details.
         #[clap(long)]
         auto_accept: bool,
+        /// Don't send delivery receipts. Senders will never see the second
+        /// checkmark; only useful for passive observation.
+        #[clap(long)]
+        no_receipts: bool,
     },
     /// List local account databases (default + named) with their
     /// identities, read from local state only.
@@ -298,6 +306,7 @@ async fn run(
             stop_after_empty_queue,
             attachments_dir,
             auto_accept,
+            no_receipts,
         } => {
             let mut manager = Manager::load_registered(store).await?;
             app::receive(
@@ -307,6 +316,7 @@ async fn run(
                     attachments_dir,
                     auto_accept,
                     download_before_emit: false,
+                    send_receipts: !no_receipts,
                 },
                 |event| event.emit(),
             )
@@ -315,9 +325,17 @@ async fn run(
         Command::Jsonrpc {
             attachments_dir,
             auto_accept,
+            no_receipts,
         } => {
             let manager = Manager::load_registered(store).await?;
-            rpc::run(manager, attachments_dir, auto_accept, signal_cli_compat).await?;
+            rpc::run(
+                manager,
+                attachments_dir,
+                auto_accept,
+                !no_receipts,
+                signal_cli_compat,
+            )
+            .await?;
         }
         Command::Schema { .. } | Command::ListAccounts => {
             unreachable!("handled before store setup")
