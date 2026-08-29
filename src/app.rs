@@ -87,7 +87,11 @@ pub async fn list_accounts() -> Value {
             .collect();
         named.sort();
         for path in named {
-            let name = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+            let name = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
             candidates.push((name, path));
         }
     }
@@ -129,7 +133,7 @@ async fn describe_account(path: &Path) -> Result<Vec<(&'static str, Value)>, Str
         ("deviceName", data.device_name().map(str::to_string).into()),
         (
             "deviceId",
-            data.device_id.map(|id| Value::from(id)).unwrap_or(Value::Null),
+            data.device_id.map(Value::from).unwrap_or(Value::Null),
         ),
         ("servers", format!("{:?}", data.signal_servers).into()),
     ])
@@ -189,9 +193,7 @@ pub async fn build_body(
             body: Some(text),
             ..Default::default()
         }),
-        (None, None) if !attachments.is_empty() => {
-            ContentBody::DataMessage(DataMessage::default())
-        }
+        (None, None) if !attachments.is_empty() => ContentBody::DataMessage(DataMessage::default()),
         (None, None) => bail!("nothing to send: pass a message, raw content, or attachments"),
     };
 
@@ -256,8 +258,7 @@ pub async fn upload_attachments(
     }
     let mut specs = Vec::with_capacity(paths.len());
     for path in paths {
-        let data =
-            std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+        let data = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
         specs.push((
             AttachmentSpec {
                 content_type: mime_guess::from_path(&path)
@@ -358,8 +359,7 @@ pub async fn receive(
                     if options.download_before_emit {
                         if let Some(dir) = &options.attachments_dir {
                             downloads =
-                                download_attachments(manager, dir, &content, &mut on_event)
-                                    .await;
+                                download_attachments(manager, dir, &content, &mut on_event).await;
                         }
                     }
                     on_event(Event::message(&content, downloads));
@@ -425,10 +425,7 @@ async fn send_delivery_receipt(
         timestamp: vec![message_timestamp],
     });
 
-    if let Err(error) = manager
-        .send_message(sender, receipt, now_millis())
-        .await
-    {
+    if let Err(error) = manager.send_message(sender, receipt, now_millis()).await {
         on_event(Event::Error {
             message: format!(
                 "delivery receipt to {} failed: {error:#}",
@@ -535,7 +532,10 @@ async fn download_attachments(
             }
         };
         let extension = mime_guess::get_mime_extensions_str(
-            pointer.content_type.as_deref().unwrap_or("application/octet-stream"),
+            pointer
+                .content_type
+                .as_deref()
+                .unwrap_or("application/octet-stream"),
         )
         .and_then(|e| e.first())
         .unwrap_or(&"bin");
@@ -613,6 +613,12 @@ pub async fn list_groups(manager: &App) -> Result<Value> {
                     })
                 })
                 .collect();
+            let requesting_members: Vec<Value> = group
+                .requesting_members
+                .iter()
+                .map(|m| serde_json::json!({ "uuid": m.aci.service_id_string() }))
+                .collect();
+            let invite_link = stored_group_invite_link(&master_key, &group);
             serde_json::json!({
                 "masterKey": hex::encode(master_key),
                 "title": group.title,
@@ -621,10 +627,36 @@ pub async fn list_groups(manager: &App) -> Result<Value> {
                 "memberCount": group.members.len(),
                 "members": members,
                 "pendingMembers": pending_members,
+                "requestingMembers": requesting_members,
+                "inviteLink": invite_link,
+                "hasAvatar": !group.avatar.is_empty(),
             })
         })
         .collect();
     Ok(Value::Array(groups))
+}
+
+/// The invite link for a stored group, when links are enabled — the same
+/// rule presage applies after a change.
+fn stored_group_invite_link(
+    master_key: &GroupMasterKeyBytes,
+    group: &presage::model::groups::Group,
+) -> Option<String> {
+    use presage::libsignal_service::groups_v2::{AccessRequired, GroupInviteLink};
+    let enabled = matches!(
+        group
+            .access_control
+            .as_ref()
+            .map(|ac| ac.add_from_invite_link),
+        Some(AccessRequired::Any | AccessRequired::Administrator)
+    ) && !group.invite_link_password.is_empty();
+    enabled.then(|| {
+        GroupInviteLink {
+            master_key: *master_key,
+            password: group.invite_link_password.clone(),
+        }
+        .to_url()
+    })
 }
 
 fn role_name(role: presage::libsignal_service::groups_v2::Role) -> &'static str {
@@ -651,12 +683,11 @@ pub async fn create_group(
 ) -> Result<Value> {
     let members = members
         .iter()
-        .map(parse_service_id)
+        .map(|m| parse_service_id(m.as_str()))
         .collect::<Result<Vec<_>>>()?;
 
-    let timer = timer_seconds.map(|duration| presage::libsignal_service::prelude::Timer {
-        duration,
-    });
+    let timer =
+        timer_seconds.map(|duration| presage::libsignal_service::prelude::Timer { duration });
 
     let master_key = manager
         .create_group(title, description, members, timer)
@@ -689,7 +720,7 @@ pub async fn add_group_members(
     let master_key = parse_group_master_key(group)?;
     let members = members
         .iter()
-        .map(parse_service_id)
+        .map(|m| parse_service_id(m.as_str()))
         .collect::<Result<Vec<_>>>()?;
     manager.add_group_members(&master_key, members).await?;
     group_result(manager, group, &master_key).await
@@ -704,7 +735,7 @@ pub async fn remove_group_members(
     let master_key = parse_group_master_key(group)?;
     let acis = members
         .iter()
-        .map(parse_aci)
+        .map(|m| parse_aci(m.as_str()))
         .collect::<Result<Vec<_>>>()?;
     manager.remove_group_members(&master_key, acis).await?;
     group_result(manager, group, &master_key).await
@@ -773,6 +804,242 @@ pub async fn accept_group_invite(manager: &mut App, group: &str) -> Result<Value
     group_result(manager, group, &master_key).await
 }
 
+/// Sets the group avatar from an image file, or clears it when `path` is
+/// `None`. The bytes are uploaded as-is (encrypted); Signal clients render
+/// JPEG/PNG/WebP.
+pub async fn set_group_avatar(manager: &mut App, group: &str, path: Option<&str>) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    let bytes = match path {
+        Some(path) => Some(
+            tokio::fs::read(path)
+                .await
+                .with_context(|| format!("reading avatar {path}"))?,
+        ),
+        None => None,
+    };
+    manager
+        .set_group_avatar(&master_key, bytes.as_deref())
+        .await?;
+    let mut result = group_result(manager, group, &master_key).await?;
+    result["avatarSet"] = Value::Bool(path.is_some());
+    Ok(result)
+}
+
+/// The server-signed change log of a group, oldest first. Only revisions
+/// from our own join onward are visible; `from_revision` narrows further.
+pub async fn get_group_history(
+    manager: &mut App,
+    group: &str,
+    from_revision: Option<u32>,
+) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    let entries = manager.group_history(&master_key, from_revision).await?;
+    let history: Vec<Value> = entries
+        .iter()
+        .map(|entry| {
+            serde_json::json!({
+                "revision": entry.change.version,
+                "editor": entry.change.editor.service_id_string(),
+                "changeEpoch": entry.change.change_epoch,
+                "changes": entry.change.changes.iter().map(group_change_json).collect::<Vec<_>>(),
+                "state": entry.state.as_ref().map(|g| serde_json::json!({
+                    "title": g.title,
+                    "description": g.description_text,
+                    "memberCount": g.members.len(),
+                })),
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "masterKey": group,
+        "history": history,
+    }))
+}
+
+/// One decrypted group change as a tagged JSON object.
+fn group_change_json(change: &presage::libsignal_service::groups_v2::GroupChange) -> Value {
+    use presage::libsignal_service::groups_v2::GroupChange::*;
+    use serde_json::json;
+
+    match change {
+        NewMember(m) => {
+            json!({"type": "memberAdded", "uuid": m.aci.service_id_string(), "role": role_name(m.role)})
+        }
+        DeleteMember(aci) => json!({"type": "memberRemoved", "uuid": aci.service_id_string()}),
+        ModifyMemberRole { aci, role } => {
+            json!({"type": "memberRoleChanged", "uuid": aci.service_id_string(), "role": role_name(*role)})
+        }
+        ModifyMemberProfileKey { aci, .. } => {
+            json!({"type": "memberProfileKeyChanged", "uuid": aci.service_id_string()})
+        }
+        NewPendingMember(p) => {
+            json!({"type": "memberInvited", "serviceId": p.address.service_id_string(), "addedBy": p.added_by_aci.service_id_string()})
+        }
+        DeletePendingMember(id) => {
+            json!({"type": "inviteRevoked", "serviceId": id.service_id_string()})
+        }
+        PromotePendingMember { address, .. } => {
+            json!({"type": "inviteAccepted", "serviceId": address.service_id_string()})
+        }
+        Title(title) => json!({"type": "titleChanged", "title": title}),
+        Avatar(key) => json!({"type": "avatarChanged", "cleared": key.is_empty()}),
+        Timer(timer) => {
+            json!({"type": "timerChanged", "seconds": timer.as_ref().map(|t| t.duration).unwrap_or(0)})
+        }
+        AttributeAccess(a) => json!({"type": "attributeAccessChanged", "access": access_name(*a)}),
+        MemberAccess(a) => json!({"type": "memberAccessChanged", "access": access_name(*a)}),
+        InviteLinkAccess(a) => {
+            json!({"type": "inviteLinkAccessChanged", "access": access_name(*a)})
+        }
+        NewRequestingMember(r) => {
+            json!({"type": "joinRequested", "uuid": r.aci.service_id_string()})
+        }
+        DeleteRequestingMember(aci) => {
+            json!({"type": "joinRequestDenied", "uuid": aci.service_id_string()})
+        }
+        PromoteRequestingMember { aci, role } => {
+            json!({"type": "joinRequestApproved", "uuid": aci.service_id_string(), "role": role_name(*role)})
+        }
+        InviteLinkPassword(_) => json!({"type": "inviteLinkPasswordChanged"}),
+        Description(d) => json!({"type": "descriptionChanged", "description": d}),
+        AnnouncementOnly(on) => json!({"type": "announcementsOnlyChanged", "enabled": on}),
+        AddBannedMember(b) => {
+            json!({"type": "memberBanned", "serviceId": b.user_id.service_id_string()})
+        }
+        DeleteBannedMember(id) => {
+            json!({"type": "memberUnbanned", "serviceId": id.service_id_string()})
+        }
+        PromotePendingPniAciMemberProfileKey(p) => {
+            json!({"type": "inviteAcceptedByPni", "uuid": p.aci.service_id_string()})
+        }
+        MemberLabel {
+            user_id,
+            label_emoji,
+            label_string,
+        } => {
+            json!({"type": "memberLabelChanged", "serviceId": user_id.service_id_string(), "emoji": label_emoji, "label": label_string})
+        }
+        MemberLabelAccess(a) => {
+            json!({"type": "memberLabelAccessChanged", "access": access_name(*a)})
+        }
+    }
+}
+
+fn access_name(access: presage::libsignal_service::groups_v2::AccessRequired) -> &'static str {
+    use presage::libsignal_service::groups_v2::AccessRequired;
+    match access {
+        AccessRequired::Any => "ANY",
+        AccessRequired::Member => "MEMBER",
+        AccessRequired::Administrator => "ADMINISTRATOR",
+        AccessRequired::Unsatisfiable => "UNSATISFIABLE",
+        AccessRequired::Unknown => "UNKNOWN",
+    }
+}
+
+/// Enables, reconfigures or disables the group's invite link.
+///
+/// `access`: `disabled`, `anyone` (link holders join immediately) or
+/// `adminApproval` (link holders file a request). `reset_password`
+/// invalidates every previously shared link.
+pub async fn set_group_invite_link(
+    manager: &mut App,
+    group: &str,
+    access: &str,
+    reset_password: bool,
+) -> Result<Value> {
+    use presage::manager::GroupInviteLinkAccess;
+
+    let master_key = parse_group_master_key(group)?;
+    let access = match access.to_ascii_lowercase().replace(['_', '-'], "").as_str() {
+        "disabled" | "off" | "none" => GroupInviteLinkAccess::Disabled,
+        "anyone" | "any" | "open" => GroupInviteLinkAccess::Anyone,
+        "adminapproval" | "approval" | "administrator" | "admin" => {
+            GroupInviteLinkAccess::AdminApproval
+        }
+        other => {
+            bail!("unknown invite link access {other}; expected disabled, anyone or adminApproval")
+        }
+    };
+    let link = manager
+        .set_group_invite_link(&master_key, access, reset_password)
+        .await?;
+    let mut result = group_result(manager, group, &master_key).await?;
+    result["inviteLink"] = link.map(Value::String).unwrap_or(Value::Null);
+    Ok(result)
+}
+
+/// The group's current invite link, or null when links are disabled.
+pub async fn get_group_invite_link(manager: &App, group: &str) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    let link = manager.group_invite_link(&master_key).await?;
+    Ok(serde_json::json!({
+        "masterKey": group,
+        "inviteLink": link,
+    }))
+}
+
+/// Previews what an invite link leads to, without joining.
+pub async fn get_group_join_info(manager: &mut App, link: &str) -> Result<Value> {
+    let info = manager.group_join_info(link).await?;
+    let master_key =
+        presage::libsignal_service::groups_v2::GroupInviteLink::parse(link)?.master_key;
+    Ok(serde_json::json!({
+        "masterKey": hex::encode(master_key),
+        "title": info.title,
+        "description": info.description,
+        "memberCount": info.member_count,
+        "revision": info.version,
+        "requiresAdminApproval": info.pending_admin_approval,
+    }))
+}
+
+/// Joins a group through its invite link. `status` is `joined` when we are
+/// now a member, or `requested` when an admin still has to approve.
+pub async fn join_group(manager: &mut App, link: &str) -> Result<Value> {
+    use presage::manager::JoinGroupOutcome;
+
+    let (status, master_key) = match manager.join_group_via_invite_link(link).await? {
+        JoinGroupOutcome::Joined(key) => ("joined", key),
+        JoinGroupOutcome::Requested(key) => ("requested", key),
+    };
+    let group = hex::encode(master_key);
+    let mut result = group_result(manager, &group, &master_key).await?;
+    result["status"] = Value::String(status.into());
+    Ok(result)
+}
+
+/// Approves join requests from the given ACIs; non-requesters are skipped.
+pub async fn approve_group_join_requests(
+    manager: &mut App,
+    group: &str,
+    members: Vec<String>,
+) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    let acis = members
+        .iter()
+        .map(|m| parse_aci(m.as_str()))
+        .collect::<Result<Vec<_>>>()?;
+    manager
+        .approve_group_join_requests(&master_key, acis)
+        .await?;
+    group_result(manager, group, &master_key).await
+}
+
+/// Denies join requests from the given ACIs; non-requesters are skipped.
+pub async fn deny_group_join_requests(
+    manager: &mut App,
+    group: &str,
+    members: Vec<String>,
+) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    let acis = members
+        .iter()
+        .map(|m| parse_aci(m.as_str()))
+        .collect::<Result<Vec<_>>>()?;
+    manager.deny_group_join_requests(&master_key, acis).await?;
+    group_result(manager, group, &master_key).await
+}
+
 /// A service ID that must be an ACI — group membership is keyed by ACI, so a
 /// PNI here is a caller mistake worth naming.
 fn parse_aci(input: &str) -> Result<presage::libsignal_service::protocol::Aci> {
@@ -784,7 +1051,11 @@ fn parse_aci(input: &str) -> Result<presage::libsignal_service::protocol::Aci> {
 
 /// Post-mutation view of a group, read back from the store so callers see the
 /// applied result rather than just an acknowledgement.
-async fn group_result(manager: &App, group: &str, master_key: &GroupMasterKeyBytes) -> Result<Value> {
+async fn group_result(
+    manager: &App,
+    group: &str,
+    master_key: &GroupMasterKeyBytes,
+) -> Result<Value> {
     let stored = manager.store().group(*master_key).await.ok().flatten();
     Ok(serde_json::json!({
         "masterKey": group,
@@ -928,6 +1199,9 @@ mod tests {
         assert!(!should_send_receipt(&content(OTHER, typing), OWN));
 
         // Our own message echoed back to us needs no acknowledgement.
-        assert!(!should_send_receipt(&content(OWN, data_message("mine")), OWN));
+        assert!(!should_send_receipt(
+            &content(OWN, data_message("mine")),
+            OWN
+        ));
     }
 }

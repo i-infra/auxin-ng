@@ -103,6 +103,15 @@ other's profile details. Each greeting emits an
 `version`. Incoming events arrive as notifications whose `method` is the
 event type and whose `params` is the JSONL event object.
 
+Group management (see `docs/implementing-groups.md` for parameters and the
+live verification sequence): `createGroup`, `leaveGroup`, `addGroupMembers`,
+`removeGroupMembers`, `setGroupTitle`, `setGroupDescription`,
+`setGroupTimer`, `setGroupMemberRole`, `setGroupAvatar`,
+`acceptGroupInvite`, `getGroupHistory`, `setGroupInviteLink`,
+`getGroupInviteLink`, `getGroupJoinInfo`, `joinGroup`,
+`approveGroupJoinRequests`, `denyGroupJoinRequests`. Groups are addressed by
+their master key in hex, which `createGroup` and `listGroups` return.
+
 [`examples/jsonrpc-requests.jsonl`](examples/jsonrpc-requests.jsonl) has a
 ready-to-adapt request per message type — plain text, attachments, group
 sends, reactions, quotes, typing indicators, read/delivery receipts, edits,

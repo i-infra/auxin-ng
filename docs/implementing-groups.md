@@ -1,7 +1,17 @@
 # Implementing full group support
 
-Status: **phases 1–3 implemented and verified against Signal's production
-servers** (2026-08-09), except group avatars and the phase 4 invite-link work.
+Status: **phases 1–4 implemented and verified against Signal's production
+servers** (phases 1–3 on 2026-08-09; avatars, invite links, join requests,
+history and the credential cache on 2026-08-29).
+
+Added 2026-08-29 and exercised live on the test group: `setGroupAvatar`
+(revision bumped, avatar key stored), `setGroupInviteLink` (`anyone` →
+link returned; `adminApproval` → access changed, password kept),
+`getGroupInviteLink`, `getGroupJoinInfo` (title/description/member count
+decrypted through the link path), and `getGroupHistory` (all 12 revisions of
+the test group decoded, including changes authored by the other account).
+`joinGroup`, `approveGroupJoinRequests` and `denyGroupJoinRequests` need a
+second account holding the link — see the verification sequence.
 
 Every RPC method has been exercised against production, single-account and
 two-account: `createGroup` (solo and with invitees), `leaveGroup` (incl.
@@ -27,7 +37,7 @@ changes, attribute changes, invites, and leaving.
 
 ## What live testing found
 
-Four defects that unit tests could not have caught, all fixed:
+Six defects that unit tests could not have caught, all fixed:
 
 1. **Creation failed with HTTP 400** until the group carried an explicit
    `AccessControl`. Signal's clients always set one; a group omitting it is
@@ -46,6 +56,13 @@ Four defects that unit tests could not have caught, all fixed:
    `DeleteMemberPendingProfileKeyAction`, not `DeleteMemberAction`. Empty
    action sets are now short-circuited before the PATCH, since the server
    accepts them and announces a no-op change to everyone.
+5. **Change-log entries carry no `group_id`.** `decrypt_group_change` assumed
+   the 32-byte id present on announced changes and failed with `WrongBlob` on
+   every log entry. It is now derived from the secret params when absent.
+6. **The JSON-RPC dispatch future overflowed the main thread stack** once the
+   group mutators were added — every handler's state is embedded inline. The
+   dispatch is now boxed per request. (The overflowed `setGroupAvatar` had
+   already committed server-side: revision 8 of the test group is that call.)
 
 Work spans all three layers of the stack (see `README.md` / Cargo patch notes):
 
@@ -111,12 +128,16 @@ auth'd with the group auth presentation:
       the server-signed `GroupChange` (`push_service/mod.rs::patch_group`).
       409 surfaces as the typed `ServiceError::GroupPatchConflict`
 - [x] `GET /v1/groups/logs/{fromRevision}` — paged change log (`GroupChanges`)
-      (`push_service/mod.rs::get_group_logs`). Endpoint only; no caller yet —
-      the mutators refetch full state after a change
-- [ ] `GET /v1/groups/avatar/form` — upload form for the avatar CDN; avatar
+      (`push_service/mod.rs::get_group_logs`). Follows `206` +
+      `Content-Range: versions a-b/c` paging, asks for
+      `maxSupportedChangeEpoch=6`; backs `getGroupHistory`
+- [x] `GET /v1/groups/avatar/form` — upload form for the avatar CDN; avatar
       blob is encrypted client-side (same blob cipher as title) then POSTed
-      to the CDN per the form
-- [ ] (phase 4) `GET /v1/groups/token`, join-via-invite-link PATCH variant
+      to CDN0 with the same S3 multipart form as profile avatars
+      (`GroupsManager::upload_group_avatar`)
+- [x] `GET /v1/groups/join/{password}` and `PATCH /v1/groups/?inviteLinkPassword=`
+      — join preview and join-via-link. `GET /v1/groups/token` (external
+      group credentials) is not needed for anything here
 
 ### 1b. Profile key credential flow (`push_service/` + new module)
 
@@ -139,12 +160,13 @@ All of 1b landed in the new `groups_v2/credentials.rs`:
 Field ciphers exist; each needs an `Actions`-level builder. All builders
 take/produce encrypted values and set nothing else on the envelope:
 
-- [ ] modify title / description / avatar-key / disappearing-timer actions
-- [ ] modify member role (promote/demote admin)
-- [ ] promote pending member (invite acceptance — presentation of own
+- [x] modify title / description / avatar-key / disappearing-timer actions
+- [x] modify member role (promote/demote admin)
+- [x] promote pending member (invite acceptance — presentation of own
       profile-key credential)
-- [ ] modify access control (attributes / membership / invite-link)
-- [ ] announcement-only flag
+- [x] invite-link access + password; join via link (direct or
+      admin-approval); approve/deny join requests
+- [ ] modify attributes / membership access control, announcement-only flag
 - [ ] banned-members add/remove (needed for clean re-add semantics after kick)
 - [x] the `Actions` envelope itself — `build_actions(revision)`. Two
       corrections to the original plan, both from `groups.proto`: the client
@@ -185,15 +207,23 @@ fetch current Group (server, not store — store may be stale)
       revokes outstanding invitations in one change
 - [x] `set_group_title` / `set_group_description` / `set_group_timer`
       (`None`/0 clears description/timer)
-- [ ] `set_group_avatar` — needs `GET /v1/groups/avatar/form` (1a) plus CDN
-      upload; the only phase 1–3 item not built
+- [x] `set_group_avatar(master_key, Option<bytes>)` — upload then
+      `ModifyAvatarAction`; local avatar cache updated in step
+- [x] `group_history(master_key, from_revision?)` — follows log pages from
+      our join revision; first entry carries full state
 - [x] `set_group_member_role(master_key, aci, role)` — rejects a target who is
       not a full member. Promotion verified live against a real member, and
       confirmed applied on the target's device
 - [x] `accept_group_invite(master_key)` — promotes own pending entry via a
       profile-key presentation. The "no invitation" refusal is verified live;
       the success path is not yet exercised *as an RPC* (see status note)
-- [ ] (phase 4) invite-link create/rotate/join, join-request approval
+- [x] `set_group_invite_link(master_key, Disabled|Anyone|AdminApproval,
+      reset_password)`, `group_invite_link`, `group_join_info(url)`,
+      `join_group_via_invite_link(url)` → `Joined|Requested`,
+      `approve_group_join_requests` / `deny_group_join_requests`
+- [x] `ProfileKeyCredentialCache` lives on `Registered`; every credential
+      lookup goes through `profile_key_credential()`, so bulk adds and
+      repeated self-credential fetches cost one round trip per ACI per week
 
 ### 2b. Conflict handling
 
@@ -237,7 +267,15 @@ fetch current Group (server, not store — store may be stale)
 - [x] Mutators return the post-change group view (`revision`, `title`,
       `memberCount`) read back from the store, so callers can confirm the
       change landed rather than just that the call returned
-- [ ] `setGroupAvatar` — blocked on `set_group_avatar` (2a)
+- [x] `setGroupAvatar` (`group`, `path?` — omit to clear)
+- [x] `getGroupHistory` (`group`, `fromRevision?`) → `{history: [{revision,
+      editor, changeEpoch, changes: [{type, …}], state?}]}`
+- [x] `setGroupInviteLink` (`group`, `access`: `disabled`|`anyone`|
+      `adminApproval`, `resetPassword?`) → `inviteLink`,
+      `getGroupInviteLink` (`group`), `getGroupJoinInfo` (`link`),
+      `joinGroup` (`link`) → `status`: `joined`|`requested`,
+      `approveGroupJoinRequests` / `denyGroupJoinRequests` (`group`, `members[]`)
+- [x] `listGroups` also reports `requestingMembers`, `inviteLink`, `hasAvatar`
 - [x] Group handle stays master-key hex; `createGroup` returns it as
       `{"masterKey": "<hex>", "title": …}`
 - [x] `listGroups` gains members/roles/pending detail
@@ -248,11 +286,33 @@ fetch current Group (server, not store — store may be stale)
 Note: `schema.rs` turned out to be protobuf-descriptor introspection, not an
 RPC method registry — there is no method schema to update for new RPCs.
 
-## Phase 4 — invite links & join requests (optional, after 1–3)
+## Phase 4 — invite links & join requests
 
-Invite-link password on the group, link-access control, `GET /v1/groups/token`,
-join-via-link (auto or admin-approval), `requesting_members` approval/denial
-actions. Self-contained; nothing in phases 1–3 depends on it.
+Built 2026-08-29. The link is `https://signal.group/#` + base64url of a
+`GroupInviteLink` proto carrying the master key and a 16-byte password; the
+password is what the server checks, so `resetPassword` invalidates shared
+links while disabling merely stops them working until re-enabled. Joining is
+a PATCH authorised by the password instead of membership: a direct add
+(`joinFromInviteLink`) when access is `anyone`, or an
+`AddMemberPendingAdminApprovalAction` when it is `adminApproval`. A join
+*request* cannot be announced — the requester cannot see the members — so
+admins learn of it when their client next syncs group state.
+
+Invite-link verification from a second account holding the link:
+
+1. `setGroupInviteLink` `anyone` → paste the link into the other account's
+   Signal app → it joins immediately; we receive a `groupChange` with
+   `memberAdded` (`joinFromInviteLink`), and `getGroupHistory` shows it.
+2. `removeGroupMembers` them, `setGroupInviteLink` `adminApproval`, and have
+   them use the same link → `listGroups` shows them under
+   `requestingMembers`; `approveGroupJoinRequests` makes them a member,
+   `denyGroupJoinRequests` clears the request.
+3. `setGroupInviteLink` `disabled` → the link fails on their side;
+   `getGroupJoinInfo` on our side returns "invite link is no longer valid".
+4. The reverse direction — `joinGroup` from auxin-ng — needs a link to a
+   group we are not in: create one from the other account, share the link,
+   `getGroupJoinInfo` then `joinGroup`, expecting `status: joined` or
+   `requested` according to that group's setting.
 
 ## Explicitly out of scope
 
