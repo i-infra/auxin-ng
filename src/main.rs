@@ -162,8 +162,27 @@ enum Command {
     ListGroups,
 }
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<()> {
+/// Group mutations and first-contact sends build very deep futures on the
+/// runtime's driving thread; the OS default stack (8 MB on macOS, less
+/// elsewhere) overflows on them. Run everything on a thread of our own.
+const MAIN_STACK_BYTES: usize = 256 * 1024 * 1024;
+
+fn main() -> Result<()> {
+    std::thread::Builder::new()
+        .name("auxin-ng-main".into())
+        .stack_size(MAIN_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .thread_stack_size(MAIN_STACK_BYTES)
+                .build()?
+                .block_on(async_main())
+        })?
+        .join()
+        .expect("main thread panicked")
+}
+
+async fn async_main() -> Result<()> {
     let filter = tracing_subscriber::EnvFilter::builder()
         .with_default_directive(tracing::metadata::LevelFilter::WARN.into())
         .from_env_lossy();

@@ -989,7 +989,12 @@ pub async fn get_group_join_info(manager: &mut App, link: &str) -> Result<Value>
         "description": info.description,
         "memberCount": info.member_count,
         "revision": info.version,
-        "requiresAdminApproval": info.pending_admin_approval,
+        // What joining through this link would do.
+        "requiresAdminApproval":
+            info.add_from_invite_link == presage::libsignal_service::groups_v2::AccessRequired::Administrator,
+        "linkAccess": access_name(info.add_from_invite_link),
+        // Whether *we* already have a request awaiting approval.
+        "requestPending": info.pending_admin_approval,
     }))
 }
 

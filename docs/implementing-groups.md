@@ -61,8 +61,25 @@ Six defects that unit tests could not have caught, all fixed:
    every log entry. It is now derived from the secret params when absent.
 6. **The JSON-RPC dispatch future overflowed the main thread stack** once the
    group mutators were added — every handler's state is embedded inline. The
-   dispatch is now boxed per request. (The overflowed `setGroupAvatar` had
-   already committed server-side: revision 8 of the test group is that call.)
+   dispatch is now boxed per request, *and* `main` runs the runtime on a
+   256 MB-stack thread of its own: boxing alone was not enough for
+   `createGroup`, which builds a deeper future still. (The overflowed
+   `setGroupAvatar` had already committed server-side: revision 8 of the
+   test group is that call.)
+7. **A client must not set `joinFromInviteLink`.** storage-service's
+   `GroupValidator.validateAddMember` 400s any action carrying it
+   (`Invalid field set on action`); the server sets the flag itself once the
+   link password checks out. Signal-Android's `createGroupJoinDirect` sets
+   only role + presentation.
+8. **A freshly registered primary has no profile key for itself.** The
+   profile-key store learns our own key only through contact sync on a
+   linked device, so `createGroup` / `acceptGroupInvite` / `joinGroup`
+   failed with `unknown recipient` on a new primary. presage now reads it
+   from registration data.
+9. **`GroupJoinInfo.pendingAdminApproval` means "*you* already have a request
+   pending"**, not "this group requires approval" — that is
+   `addFromInviteLink`. `getGroupJoinInfo` now reports both, as
+   `requiresAdminApproval`/`linkAccess` and `requestPending`.
 
 Work spans all three layers of the stack (see `README.md` / Cargo patch notes):
 
@@ -298,7 +315,21 @@ a PATCH authorised by the password instead of membership: a direct add
 *request* cannot be announced — the requester cannot see the members — so
 admins learn of it when their client next syncs group state.
 
-Invite-link verification from a second account holding the link:
+`scripts/group-e2e.py` automates all of this against two registered
+accounts — 14 steps covering both directions of every mutator, the link
+join in both access modes, request approve/deny, password rotation and
+revocation, and cross-account history agreement. It creates a throwaway
+group, sweeps up strays from aborted runs, and leaves at the end:
+
+    scripts/group-e2e.py --a-args "" --b-args "-a test2"
+
+It is real production traffic — only run it with test accounts. The one
+step it skips once the two accounts know each other is
+`acceptGroupInvite`'s success path: an invite only happens when the
+inviter holds no profile key for the invitee, so re-running it needs a
+store where that is still true.
+
+Invite-link verification by hand, from a second account holding the link:
 
 1. `setGroupInviteLink` `anyone` → paste the link into the other account's
    Signal app → it joins immediately; we receive a `groupChange` with
