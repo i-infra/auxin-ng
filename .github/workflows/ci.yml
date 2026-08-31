@@ -18,6 +18,10 @@ jobs:
       # libsignal's spqr crate validates its protobufs with protoc.
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      # The runner's rustup installs pinned toolchains with the minimal
+      # profile, which lacks clippy.
+      - name: Install clippy
+        run: rustup component add clippy
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --locked
