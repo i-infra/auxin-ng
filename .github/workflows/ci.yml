@@ -1,0 +1,84 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The tree as consumers get it: git deps on the published i-infra forks,
+  # locked. This is what catches "compiles only against unpushed forks".
+  published-forks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # libsignal's spqr crate validates its protobufs with protoc.
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --locked
+      - name: Test
+        run: cargo test --locked
+      - name: Clippy
+        run: cargo clippy --all-targets -p auxin-ng --locked -- -D warnings
+
+  # The tree as it is developed: the three repos side by side with path
+  # patches, the way docs/implementing-groups.md describes local iteration.
+  # Catches a fork branch that no longer builds against its siblings before
+  # anything is pushed to consumers.
+  path-patched-forks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: auxin-ng
+      - uses: actions/checkout@v4
+        with:
+          repository: i-infra/libsignal-service-rs
+          ref: profile-avatar-payment-address
+          path: libsignal-service-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: i-infra/presage
+          ref: profile-extended
+          path: presage
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            auxin-ng
+            libsignal-service-rs
+            presage
+      - name: Test libsignal-service-rs
+        working-directory: libsignal-service-rs
+        run: cargo test
+      # presage's workspace already patches libsignal-service to the
+      # ../libsignal-service-rs sibling checked out above.
+      - name: Test presage
+        working-directory: presage
+        run: cargo test -p presage
+      - name: Point auxin-ng at the sibling checkouts
+        working-directory: auxin-ng
+        run: |
+          python3 - <<'PYEOF'
+          path = 'Cargo.toml'
+          s = open(path).read()
+          s = s.replace(
+              'libsignal-service = { git = "https://github.com/i-infra/libsignal-service-rs", branch = "profile-avatar-payment-address" }',
+              'libsignal-service = { path = "../libsignal-service-rs" }')
+          s = s.replace(
+              '[patch.crates-io]',
+              '[patch."https://github.com/i-infra/presage"]\n'
+              'presage = { path = "../presage/presage" }\n'
+              'presage-store-sqlite = { path = "../presage/presage-store-sqlite" }\n'
+              '\n[patch.crates-io]', 1)
+          open(path, 'w').write(s)
+          PYEOF
+      - name: Test auxin-ng against the siblings
+        working-directory: auxin-ng
+        run: cargo test

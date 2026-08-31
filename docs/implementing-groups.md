@@ -316,9 +316,11 @@ a PATCH authorised by the password instead of membership: a direct add
 admins learn of it when their client next syncs group state.
 
 `scripts/group-e2e.py` automates all of this against two registered
-accounts — 14 steps covering both directions of every mutator, the link
+accounts — 15 steps covering both directions of every mutator, the link
 join in both access modes, request approve/deny, password rotation and
-revocation, and cross-account history agreement. It creates a throwaway
+revocation, cross-account history agreement, and the delivery-receipt path
+(a group message from A must earn a `DELIVERY` receipt from B carrying the
+original timestamp — the one-checkmark regression). It creates a throwaway
 group, sweeps up strays from aborted runs, and leaves at the end:
 
     scripts/group-e2e.py --a-args "" --b-args "-a test2"

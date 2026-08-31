@@ -229,6 +229,28 @@ def main():
             assert last_change(A, key)[1] == ["memberAdded"]
         _()
 
+        @step("group message from A earns a delivery receipt from B")
+        def _():
+            # The receipt path is the regression this guards: group messages
+            # used to be explicitly excluded from receipting, so senders only
+            # ever saw one checkmark.
+            sent = A.call("send", group=key, message="receipt check")
+            ts = str(sent["timestamp"])
+            B.wait_event(lambda ev: is_group_message(ev, key)
+                         and ev["params"]["envelope"]["sender"] == a_aci, timeout=60)
+
+            def is_our_receipt(ev):
+                if ev.get("method") != "message":
+                    return False
+                params = ev["params"]
+                return (params.get("contentType") == "receiptMessage"
+                        and params["envelope"]["sender"] == b_aci
+                        and params["content"].get("type") == "DELIVERY"
+                        and ts in [str(t) for t in params["content"].get("timestamp", [])])
+
+            A.wait_event(is_our_receipt, timeout=60)
+        _()
+
         @step("re-adding an existing member is a no-op (no revision bump)")
         def _():
             before = last_change(A, key)[0]
