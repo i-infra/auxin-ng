@@ -129,7 +129,26 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--a-args", default="")
     ap.add_argument("--b-args", default="-a test2")
+    ap.add_argument("--a-db", default="~/Library/Application Support/io.auxin.auxin-ng/auxin.db3",
+                    help="A's sqlite store, for forgetting B's profile key")
+    ap.add_argument("--keep-contact", action="store_true",
+                    help="don't forget B's profile key in A's store (skips the pending-invite path)")
     args = ap.parse_args()
+
+    # Forget B's profile key in A's store before anything starts, so
+    # createGroup has to *invite* B and the acceptGroupInvite success path
+    # runs on every execution instead of only on first contact.
+    if not args.keep_contact:
+        ident = subprocess.run([BIN, *args.b_args.split(), "whoami"],
+                               capture_output=True, text=True, timeout=60)
+        b_uuid = json.loads(ident.stdout)["aci"].replace("-", "").upper()
+        db = os.path.expanduser(args.a_db)
+        if os.path.exists(db):
+            subprocess.run(["sqlite3", db,
+                            f"DELETE FROM profile_keys WHERE hex(uuid) = '{b_uuid}'"], check=True)
+            print("forgot B's profile key in A's store; expecting the pending-invite path")
+        else:
+            print(f"warning: {db} not found, cannot forget B")
 
     A = Node("A", args.a_args.split())
     B = Node("B", args.b_args.split())
@@ -296,6 +315,72 @@ def main():
             assert b_aci in [m["uuid"] for m in {g["masterKey"]: g for g in A.call("listGroups")}[key]["members"]]
         _()
 
+        @step("ban blocks the invite link; unban restores it")
+        def _():
+            A.call("removeGroupMembers", group=key, members=[b_aci])
+            A.call("banGroupMembers", group=key, members=[b_aci])
+            assert last_change(A, key)[1] == ["memberBanned"]
+            banned = A.call("getGroup", group=key)["bannedMembers"]
+            assert [b["serviceId"] for b in banned] == [b_aci], banned
+            for method, kw in (("joinGroup", {"link": link}), ("getGroupJoinInfo", {"link": link})):
+                try:
+                    B.call(method, **kw)
+                    raise AssertionError(f"{method} succeeded while banned")
+                except RpcError as e:
+                    assert "no longer valid" in str(e), (method, e)
+            A.call("unbanGroupMembers", group=key, members=[b_aci])
+            assert last_change(A, key)[1] == ["memberUnbanned"]
+            assert A.call("getGroup", group=key)["bannedMembers"] == []
+            assert B.call("joinGroup", link=link)["status"] == "requested"
+            A.call("approveGroupJoinRequests", group=key, members=[b_aci])
+        _()
+
+        @step("attributes access ADMINISTRATOR blocks a plain member server-side")
+        def _():
+            A.call("setGroupAttributesAccess", group=key, access="ADMINISTRATOR")
+            assert last_change(A, key)[1] == ["attributeAccessChanged"]
+            try:
+                B.call("setGroupTitle", group=key, title="B should not be able to do this")
+                raise AssertionError("non-admin title change succeeded")
+            except RpcError:
+                pass
+            A.call("setGroupAttributesAccess", group=key, access="MEMBER")
+            B.call("setGroupTitle", group=key, title="e2e renamed by B")
+        _()
+
+        @step("members access ADMINISTRATOR blocks a plain member server-side")
+        def _():
+            A.call("setGroupMembersAccess", group=key, access="ADMINISTRATOR")
+            assert last_change(A, key)[1] == ["memberAccessChanged"]
+            bogus = "00000000-0000-4000-8000-000000000042"
+            try:
+                B.call("addGroupMembers", group=key, members=[bogus])
+                raise AssertionError("non-admin member add succeeded")
+            except RpcError:
+                pass
+            finally:
+                # If the assert above ever fails, don't leave a bogus invite.
+                A.call("removeGroupMembers", group=key, members=[bogus])
+            A.call("setGroupMembersAccess", group=key, access="MEMBER")
+        _()
+
+        @step("announcements-only is admin-gated and toggles")
+        def _():
+            try:
+                B.call("setGroupAnnouncementsOnly", group=key, enabled=True)
+                raise AssertionError("non-admin announcements toggle succeeded")
+            except RpcError:
+                pass
+            A.call("setGroupAnnouncementsOnly", group=key, enabled=True)
+            assert last_change(A, key)[1] == ["announcementsOnlyChanged"]
+            assert A.call("getGroup", group=key)["announcementsOnly"] is True
+            before = last_change(A, key)[0]
+            A.call("setGroupAnnouncementsOnly", group=key, enabled=True)
+            assert last_change(A, key)[0] == before, "no-op toggle bumped revision"
+            A.call("setGroupAnnouncementsOnly", group=key, enabled=False)
+            assert A.call("getGroup", group=key)["announcementsOnly"] is False
+        _()
+
         @step("approving a non-requester is a no-op")
         def _():
             before = last_change(A, key)[0]
@@ -319,6 +404,27 @@ def main():
             except RpcError as e:
                 assert "no longer valid" in str(e), e
             assert A.call("getGroupInviteLink", group=key)["inviteLink"] is None
+        _()
+
+        @step("PNI invite: B accepts via PNI promotion")
+        def _():
+            b_pni = b["pni"]
+            res = A.call("createGroup", title="e2e pni", members=[f"PNI:{b_pni}"])
+            key2 = res["masterKey"]
+            try:
+                g = A.call("getGroup", group=key2)
+                assert [m["serviceId"] for m in g["pendingMembers"]] == [f"PNI:{b_pni}"], g
+                B.call("acceptGroupInvite", group=key2)
+                g = A.call("getGroup", group=key2)
+                assert b_aci in [m["uuid"] for m in g["members"]], g
+                assert g["pendingMembers"] == [], g
+                assert last_change(A, key2)[1] == ["inviteAcceptedByPni"]
+            finally:
+                for n in (B, A):
+                    try:
+                        n.call("leaveGroup", group=key2, force=True)
+                    except RpcError:
+                        pass
         _()
 
         @step("history is consistent between accounts")

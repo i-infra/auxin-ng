@@ -107,9 +107,11 @@ Group management (see `docs/implementing-groups.md` for parameters and the
 live verification sequence): `createGroup`, `leaveGroup`, `addGroupMembers`,
 `removeGroupMembers`, `setGroupTitle`, `setGroupDescription`,
 `setGroupTimer`, `setGroupMemberRole`, `setGroupAvatar`,
-`acceptGroupInvite`, `getGroupHistory`, `setGroupInviteLink`,
+`acceptGroupInvite`, `getGroup`, `getGroupHistory`, `setGroupInviteLink`,
 `getGroupInviteLink`, `getGroupJoinInfo`, `joinGroup`,
-`approveGroupJoinRequests`, `denyGroupJoinRequests`. Groups are addressed by
+`approveGroupJoinRequests`, `denyGroupJoinRequests`,
+`setGroupAttributesAccess`, `setGroupMembersAccess`,
+`setGroupAnnouncementsOnly`, `banGroupMembers`, `unbanGroupMembers`. Groups are addressed by
 their master key in hex, which `createGroup` and `listGroups` return.
 
 [`examples/jsonrpc-requests.jsonl`](examples/jsonrpc-requests.jsonl) has a

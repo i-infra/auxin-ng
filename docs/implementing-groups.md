@@ -37,7 +37,7 @@ changes, attribute changes, invites, and leaving.
 
 ## What live testing found
 
-Six defects that unit tests could not have caught, all fixed:
+Ten defects that unit tests could not have caught, all fixed:
 
 1. **Creation failed with HTTP 400** until the group carried an explicit
    `AccessControl`. Signal's clients always set one; a group omitting it is
@@ -80,6 +80,10 @@ Six defects that unit tests could not have caught, all fixed:
    pending"**, not "this group requires approval" — that is
    `addFromInviteLink`. `getGroupJoinInfo` now reports both, as
    `requiresAdminApproval`/`linkAccess` and `requestPending`.
+10. **A change's editor is not always an ACI.** Accepting a PNI-addressed
+    invite is authored *as* the PNI, and the server stamps that ciphertext
+    into `sourceUserId`; decoding it as an ACI failed on real change logs.
+    `GroupChanges::editor` is now a `ServiceId`.
 
 Work spans all three layers of the stack (see `README.md` / Cargo patch notes):
 
@@ -183,7 +187,9 @@ take/produce encrypted values and set nothing else on the envelope:
       profile-key credential)
 - [x] invite-link access + password; join via link (direct or
       admin-approval); approve/deny join requests
-- [ ] modify attributes / membership access control, announcement-only flag
+- [x] modify attributes / membership access control, announcements-only,
+      ban/unban, accept-PNI-invite promotion (`editor` widened to
+      `ServiceId` — see finding 10)
 - [ ] banned-members add/remove (needed for clean re-add semantics after kick)
 - [x] the `Actions` envelope itself — `build_actions(revision)`. Two
       corrections to the original plan, both from `groups.proto`: the client
@@ -238,6 +244,11 @@ fetch current Group (server, not store — store may be stale)
       reset_password)`, `group_invite_link`, `group_join_info(url)`,
       `join_group_via_invite_link(url)` → `Joined|Requested`,
       `approve_group_join_requests` / `deny_group_join_requests`
+- [x] `set_group_attributes_access` / `set_group_members_access`,
+      `set_group_announcements_only`, `ban_group_members` /
+      `unban_group_members` (no-op guarded); `accept_group_invite` handles
+      PNI-addressed invites; `fetch_group` exposes the server view (banned
+      members, announcements-only) that the store model omits
 - [x] `ProfileKeyCredentialCache` lives on `Registered`; every credential
       lookup goes through `profile_key_credential()`, so bulk adds and
       repeated self-credential fetches cost one round trip per ACI per week
@@ -293,6 +304,12 @@ fetch current Group (server, not store — store may be stale)
       `joinGroup` (`link`) → `status`: `joined`|`requested`,
       `approveGroupJoinRequests` / `denyGroupJoinRequests` (`group`, `members[]`)
 - [x] `listGroups` also reports `requestingMembers`, `inviteLink`, `hasAvatar`
+- [x] `getGroup` (`group`) — server-authoritative view incl. `bannedMembers`,
+      `announcementsOnly`, `accessControl`, `timer`
+- [x] `setGroupAttributesAccess` / `setGroupMembersAccess` (`group`,
+      `access`: `MEMBER`|`ADMINISTRATOR`), `setGroupAnnouncementsOnly`
+      (`group`, `enabled`), `banGroupMembers` / `unbanGroupMembers`
+      (`group`, `members[]` — ACI or `PNI:uuid`)
 - [x] Group handle stays master-key hex; `createGroup` returns it as
       `{"masterKey": "<hex>", "title": …}`
 - [x] `listGroups` gains members/roles/pending detail
@@ -316,20 +333,21 @@ a PATCH authorised by the password instead of membership: a direct add
 admins learn of it when their client next syncs group state.
 
 `scripts/group-e2e.py` automates all of this against two registered
-accounts — 15 steps covering both directions of every mutator, the link
-join in both access modes, request approve/deny, password rotation and
-revocation, cross-account history agreement, and the delivery-receipt path
-(a group message from A must earn a `DELIVERY` receipt from B carrying the
-original timestamp — the one-checkmark regression). It creates a throwaway
+accounts — 21 steps covering both directions of every mutator, the link
+join in both access modes, request approve/deny, ban/unban (a banned id is
+403'd off the link), server-side enforcement of both access controls, the
+announcements-only toggle, a PNI-addressed invite accepted via PNI
+promotion, password rotation and revocation, cross-account history
+agreement, and the delivery-receipt path (a group message from A must earn
+a `DELIVERY` receipt from B carrying the original timestamp — the
+one-checkmark regression). Before starting it deletes B's profile key from
+A's store, so the pending-invite → `acceptGroupInvite` path runs on every
+execution rather than only on first contact (`--keep-contact` skips that). It creates a throwaway
 group, sweeps up strays from aborted runs, and leaves at the end:
 
     scripts/group-e2e.py --a-args "" --b-args "-a test2"
 
-It is real production traffic — only run it with test accounts. The one
-step it skips once the two accounts know each other is
-`acceptGroupInvite`'s success path: an invite only happens when the
-inviter holds no profile key for the invitee, so re-running it needs a
-store where that is still true.
+It is real production traffic — only run it with test accounts.
 
 Invite-link verification by hand, from a second account holding the link:
 

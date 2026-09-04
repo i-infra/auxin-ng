@@ -207,6 +207,21 @@ struct InviteLinkParams {
     link: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetGroupAccessParams {
+    group: String,
+    /// `MEMBER` or `ADMINISTRATOR`.
+    access: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetGroupAnnouncementsOnlyParams {
+    group: String,
+    enabled: bool,
+}
+
 pub async fn run(
     manager: App,
     attachments_dir: Option<PathBuf>,
@@ -498,7 +513,56 @@ pub async fn run(
                     };
                     response(request.id, result)
                 }
-                "denyGroupJoinRequests" => {
+                "getGroup" => {
+                let result = match serde_json::from_value::<GroupOnlyParams>(request.params) {
+                    Ok(p) => app::get_group(&mut manager, &p.group).await,
+                    Err(error) => Err(error.into()),
+                };
+                response(request.id, result)
+            }
+            "setGroupAttributesAccess" => {
+                let result = match serde_json::from_value::<SetGroupAccessParams>(request.params) {
+                    Ok(p) => {
+                        app::set_group_attributes_access(&mut manager, &p.group, &p.access).await
+                    }
+                    Err(error) => Err(error.into()),
+                };
+                response(request.id, result)
+            }
+            "setGroupMembersAccess" => {
+                let result = match serde_json::from_value::<SetGroupAccessParams>(request.params) {
+                    Ok(p) => app::set_group_members_access(&mut manager, &p.group, &p.access).await,
+                    Err(error) => Err(error.into()),
+                };
+                response(request.id, result)
+            }
+            "setGroupAnnouncementsOnly" => {
+                let result =
+                    match serde_json::from_value::<SetGroupAnnouncementsOnlyParams>(request.params)
+                    {
+                        Ok(p) => {
+                            app::set_group_announcements_only(&mut manager, &p.group, p.enabled)
+                                .await
+                        }
+                        Err(error) => Err(error.into()),
+                    };
+                response(request.id, result)
+            }
+            "banGroupMembers" => {
+                let result = match serde_json::from_value::<GroupMembersParams>(request.params) {
+                    Ok(p) => app::ban_group_members(&mut manager, &p.group, p.members).await,
+                    Err(error) => Err(error.into()),
+                };
+                response(request.id, result)
+            }
+            "unbanGroupMembers" => {
+                let result = match serde_json::from_value::<GroupMembersParams>(request.params) {
+                    Ok(p) => app::unban_group_members(&mut manager, &p.group, p.members).await,
+                    Err(error) => Err(error.into()),
+                };
+                response(request.id, result)
+            }
+            "denyGroupJoinRequests" => {
                     let result = match serde_json::from_value::<GroupMembersParams>(request.params)
                     {
                         Ok(p) => {

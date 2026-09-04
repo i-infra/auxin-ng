@@ -1045,6 +1045,154 @@ pub async fn deny_group_join_requests(
     group_result(manager, group, &master_key).await
 }
 
+/// The group's full server-side state: everything `listGroups` shows plus
+/// banned members, the announcements-only flag and access control — fields
+/// the local store does not carry.
+pub async fn get_group(manager: &mut App, group: &str) -> Result<Value> {
+
+    let master_key = parse_group_master_key(group)?;
+    let g = manager.fetch_group(&master_key).await?;
+
+    let members: Vec<Value> = g
+        .members
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "uuid": m.aci.service_id_string(),
+                "role": role_name(m.role),
+                "joinedAtRevision": m.joined_at_version,
+            })
+        })
+        .collect();
+    let pending: Vec<Value> = g
+        .members_pending_profile_key
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "serviceId": m.address.service_id_string(),
+                "addedBy": m.added_by_aci.service_id_string(),
+            })
+        })
+        .collect();
+    let requesting: Vec<Value> = g
+        .members_pending_admin_approval
+        .iter()
+        .map(|m| serde_json::json!({"uuid": m.aci.service_id_string()}))
+        .collect();
+    let banned: Vec<Value> = g
+        .members_banned
+        .iter()
+        .map(|b| {
+            serde_json::json!({
+                "serviceId": b.user_id.service_id_string(),
+                "bannedAt": b.timestamp,
+            })
+        })
+        .collect();
+    let access = g.access_control.as_ref().map(|ac| {
+        serde_json::json!({
+            "attributes": access_name(ac.attributes),
+            "members": access_name(ac.members),
+            "addFromInviteLink": access_name(ac.add_from_invite_link),
+        })
+    });
+
+    Ok(serde_json::json!({
+        "masterKey": group,
+        "title": g.title,
+        "description": g.description_text,
+        "revision": g.version,
+        "timer": g.disappearing_messages_timer.as_ref().map(|t| t.duration),
+        "announcementsOnly": g.announcements_only,
+        "hasAvatar": !g.avatar.is_empty(),
+        "accessControl": access,
+        "members": members,
+        "pendingMembers": pending,
+        "requestingMembers": requesting,
+        "bannedMembers": banned,
+    }))
+}
+
+/// An access level for group *editing* rights: `MEMBER` or `ADMINISTRATOR`.
+fn parse_edit_access(input: &str) -> Result<presage::libsignal_service::groups_v2::AccessRequired> {
+    use presage::libsignal_service::groups_v2::AccessRequired;
+    match input.to_ascii_uppercase().as_str() {
+        "MEMBER" | "MEMBERS" => Ok(AccessRequired::Member),
+        "ADMINISTRATOR" | "ADMIN" => Ok(AccessRequired::Administrator),
+        other => bail!("unknown access {other}; expected MEMBER or ADMINISTRATOR"),
+    }
+}
+
+/// Sets who may edit group attributes (title, description, avatar, timer).
+pub async fn set_group_attributes_access(
+    manager: &mut App,
+    group: &str,
+    access: &str,
+) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    let access = parse_edit_access(access)?;
+    manager
+        .set_group_attributes_access(&master_key, access)
+        .await?;
+    group_result(manager, group, &master_key).await
+}
+
+/// Sets who may edit membership.
+pub async fn set_group_members_access(
+    manager: &mut App,
+    group: &str,
+    access: &str,
+) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    let access = parse_edit_access(access)?;
+    manager.set_group_members_access(&master_key, access).await?;
+    group_result(manager, group, &master_key).await
+}
+
+/// Toggles announcements-only mode (clients then let only admins send).
+pub async fn set_group_announcements_only(
+    manager: &mut App,
+    group: &str,
+    enabled: bool,
+) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    manager
+        .set_group_announcements_only(&master_key, enabled)
+        .await?;
+    group_result(manager, group, &master_key).await
+}
+
+/// Bans service ids from rejoining via invite link (admin only). Does not
+/// remove current members.
+pub async fn ban_group_members(
+    manager: &mut App,
+    group: &str,
+    members: Vec<String>,
+) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    let ids = members
+        .iter()
+        .map(|m| parse_service_id(m.as_str()))
+        .collect::<Result<Vec<_>>>()?;
+    manager.ban_group_members(&master_key, ids).await?;
+    group_result(manager, group, &master_key).await
+}
+
+/// Lifts bans (admin only).
+pub async fn unban_group_members(
+    manager: &mut App,
+    group: &str,
+    members: Vec<String>,
+) -> Result<Value> {
+    let master_key = parse_group_master_key(group)?;
+    let ids = members
+        .iter()
+        .map(|m| parse_service_id(m.as_str()))
+        .collect::<Result<Vec<_>>>()?;
+    manager.unban_group_members(&master_key, ids).await?;
+    group_result(manager, group, &master_key).await
+}
+
 /// A service ID that must be an ACI — group membership is keyed by ACI, so a
 /// PNI here is a caller mistake worth naming.
 fn parse_aci(input: &str) -> Result<presage::libsignal_service::protocol::Aci> {
