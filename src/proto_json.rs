@@ -69,9 +69,6 @@ pub fn body_type(body: &ContentBody) -> (&'static str, &'static str) {
             "decryptionErrorMessage",
         ),
         ContentBody::StoryMessage(_) => ("signalservice.StoryMessage", "storyMessage"),
-        ContentBody::PniSignatureMessage(_) => {
-            ("signalservice.PniSignatureMessage", "pniSignatureMessage")
-        }
         ContentBody::EditMessage(_) => ("signalservice.EditMessage", "editMessage"),
     }
 }
@@ -88,7 +85,6 @@ pub fn body_to_json(body: &ContentBody) -> Result<(&'static str, Value)> {
         ContentBody::TypingMessage(m) => m.encode_to_vec(),
         ContentBody::DecryptionErrorMessage(m) => m.encode_to_vec(),
         ContentBody::StoryMessage(m) => m.encode_to_vec(),
-        ContentBody::PniSignatureMessage(m) => m.encode_to_vec(),
         ContentBody::EditMessage(m) => m.encode_to_vec(),
     };
     Ok((tag, proto_bytes_to_json(type_name, &bytes)?))

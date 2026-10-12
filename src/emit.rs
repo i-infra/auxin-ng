@@ -29,7 +29,7 @@ impl From<&Content> for JsonEnvelope {
             sender: m.sender.service_id_string(),
             sender_device: m.sender_device.into(),
             destination: m.destination.service_id_string(),
-            timestamp: m.timestamp.timestamp_millis(),
+            timestamp: m.client_timestamp.timestamp_millis(),
             server_timestamp: m.server_timestamp.timestamp_millis(),
             unidentified_sender: m.unidentified_sender,
             needs_receipt: m.needs_receipt,

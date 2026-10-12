@@ -185,7 +185,8 @@ pub async fn handle_send(manager: &mut App, params: Value) -> Result<Value> {
         }
     }
     if params.end_session {
-        content["flags"] = json!(presage::proto::data_message::Flags::EndSession as u32);
+        // END_SESSION (1) is reserved in current protos; kept for signal-cli compat.
+        content["flags"] = json!(1u32);
     }
     if let Some(sticker) = &params.sticker {
         content["sticker"] = sticker_json(manager, sticker).await?;

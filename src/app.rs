@@ -418,7 +418,7 @@ async fn send_delivery_receipt(
     on_event: &mut impl FnMut(Event),
 ) {
     let sender = content.metadata.sender;
-    let message_timestamp = content.metadata.timestamp.timestamp_millis() as u64;
+    let message_timestamp = content.metadata.client_timestamp.timestamp_millis() as u64;
 
     let receipt = ContentBody::ReceiptMessage(presage::proto::ReceiptMessage {
         r#type: Some(presage::proto::receipt_message::Type::Delivery as i32),
@@ -539,7 +539,7 @@ async fn download_attachments(
         )
         .and_then(|e| e.first())
         .unwrap_or(&"bin");
-        let timestamp = content.metadata.timestamp.timestamp_millis();
+        let timestamp = content.metadata.client_timestamp.timestamp_millis();
         let base = pointer
             .file_name
             .clone()
@@ -922,6 +922,7 @@ fn group_change_json(change: &presage::libsignal_service::groups_v2::GroupChange
         MemberLabelAccess(a) => {
             json!({"type": "memberLabelAccessChanged", "access": access_name(*a)})
         }
+        TerminateGroup => json!({"type": "groupTerminated"}),
     }
 }
 
@@ -1287,7 +1288,8 @@ mod tests {
                 sender: aci.into(),
                 destination: aci.into(),
                 sender_device: DeviceId::new(1).unwrap(),
-                timestamp: chrono::Utc::now(),
+                pni_verified: None,
+                client_timestamp: chrono::Utc::now(),
                 server_timestamp: chrono::Utc::now(),
                 // Set on incoming receipts too, which is exactly why
                 // should_send_receipt must not key off it.
