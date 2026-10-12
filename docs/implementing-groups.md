@@ -311,7 +311,9 @@ fetch current Group (server, not store — store may be stale)
       (`group`, `enabled`), `banGroupMembers` / `unbanGroupMembers`
       (`group`, `members[]` — ACI or `PNI:uuid`)
 - [x] Group handle stays master-key hex; `createGroup` returns it as
-      `{"masterKey": "<hex>", "title": …}`
+      `{"masterKey": "<hex>", "groupId": "<base64>", "title": …}`.
+      `groupId` (also on `listGroups` / `getGroup`) is signal-cli's id, the
+      form compat-mode `send` and `receive` use.
 - [x] `listGroups` gains members/roles/pending detail
 - [ ] Emit decrypted group-change events on receive (`emit.rs`)
 - [ ] `docs/signal-cli-compat.md`: map new methods to signal-cli's

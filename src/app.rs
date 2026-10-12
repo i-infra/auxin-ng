@@ -621,6 +621,7 @@ pub async fn list_groups(manager: &App) -> Result<Value> {
             let invite_link = stored_group_invite_link(&master_key, &group);
             serde_json::json!({
                 "masterKey": hex::encode(master_key),
+                "groupId": crate::compat::group_id_b64(&master_key),
                 "title": group.title,
                 "description": group.description,
                 "revision": group.revision,
@@ -695,6 +696,7 @@ pub async fn create_group(
 
     Ok(serde_json::json!({
         "masterKey": hex::encode(master_key),
+        "groupId": crate::compat::group_id_b64(&master_key),
         "title": title,
     }))
 }
@@ -1050,7 +1052,6 @@ pub async fn deny_group_join_requests(
 /// banned members, the announcements-only flag and access control — fields
 /// the local store does not carry.
 pub async fn get_group(manager: &mut App, group: &str) -> Result<Value> {
-
     let master_key = parse_group_master_key(group)?;
     let g = manager.fetch_group(&master_key).await?;
 
@@ -1100,6 +1101,7 @@ pub async fn get_group(manager: &mut App, group: &str) -> Result<Value> {
 
     Ok(serde_json::json!({
         "masterKey": group,
+        "groupId": crate::compat::group_id_b64(&master_key),
         "title": g.title,
         "description": g.description_text,
         "revision": g.version,
