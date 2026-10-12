@@ -88,9 +88,9 @@ Ten defects that unit tests could not have caught, all fixed:
 Work spans all three layers of the stack (see `README.md` / Cargo patch notes):
 
 - `auxin-ng` — RPC surface
-- `presage` fork (`i-infra/presage`, branch `profile-extended`) — orchestration
+- `presage` fork (`i-infra/presage`, branch `rebased-2026-10`) — orchestration
 - `libsignal-service-rs` fork (`i-infra/libsignal-service-rs`, branch
-  `profile-avatar-payment-address`) — endpoints + group crypto
+  `rebased-2026-10`) — endpoints + group crypto
 
 ## Background: how Groups v2 works
 

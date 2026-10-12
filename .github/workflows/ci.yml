@@ -43,12 +43,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: i-infra/libsignal-service-rs
-          ref: profile-avatar-payment-address
+          ref: rebased-2026-10
           path: libsignal-service-rs
       - uses: actions/checkout@v4
         with:
           repository: i-infra/presage
-          ref: profile-extended
+          ref: rebased-2026-10
           path: presage
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -70,11 +70,13 @@ jobs:
         working-directory: auxin-ng
         run: |
           python3 - <<'PYEOF'
+          import re
           path = 'Cargo.toml'
           s = open(path).read()
-          s = s.replace(
-              'libsignal-service = { git = "https://github.com/i-infra/libsignal-service-rs", branch = "profile-avatar-payment-address" }',
-              'libsignal-service = { path = "../libsignal-service-rs" }')
+          s, n = re.subn(
+              r'^libsignal-service = \{ git = "https://github.com/i-infra/libsignal-service-rs".*$',
+              'libsignal-service = { path = "../libsignal-service-rs" }', s, flags=re.M)
+          assert n == 1, "libsignal-service patch line not found"
           s = s.replace(
               '[patch.crates-io]',
               '[patch."https://github.com/i-infra/presage"]\n'

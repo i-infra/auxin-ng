@@ -1,16 +1,18 @@
 [package]
 name = "auxin-ng"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "AGPL-3.0-only"
 description = "Scriptable, protocol-transparent Signal CLI built on presage"
 
 [dependencies]
-# i-infra forks carry profile avatar/payment-address and username support
-# on top of upstream whisperfish revs (f74b96e / bb43e81, libsignal 0.99);
-# see docs/signal-cli-compat.md and docs/username-support.md.
-presage = { git = "https://github.com/i-infra/presage", branch = "profile-extended" }
-presage-store-sqlite = { git = "https://github.com/i-infra/presage", branch = "profile-extended" }
+# i-infra forks carry profile avatar/payment-address, username and Groups v2
+# write support on top of upstream whisperfish revs (presage 96f5e92 /
+# libsignal-service 7aa4909, libsignal 0.99), pinned to commits on their
+# `rebased-2026-10` branches; see docs/signal-cli-compat.md,
+# docs/username-support.md and docs/implementing-groups.md.
+presage = { git = "https://github.com/i-infra/presage", rev = "8756049091e186663c673ee34b2af4dff1e24d34" }
+presage-store-sqlite = { git = "https://github.com/i-infra/presage", rev = "8756049091e186663c673ee34b2af4dff1e24d34" }
 
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "io-std", "io-util", "fs", "time"] }
 futures = "0.3"
@@ -36,9 +38,9 @@ protox = "0.9"
 prost = "0.14"
 
 # presage's manifest points at upstream whisperfish/libsignal-service-rs;
-# redirect it to the i-infra fork carrying our profile/username work.
+# redirect it to the i-infra fork carrying our profile/username/groups work.
 [patch."https://github.com/whisperfish/libsignal-service-rs"]
-libsignal-service = { git = "https://github.com/i-infra/libsignal-service-rs", branch = "profile-avatar-payment-address" }
+libsignal-service = { git = "https://github.com/i-infra/libsignal-service-rs", rev = "d7fa2a479f2c1959c6124c67064728de373adfb4" }
 
 # For local development against sibling checkouts, comment out the patch
 # above and use instead:
